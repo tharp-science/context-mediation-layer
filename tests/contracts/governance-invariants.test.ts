@@ -624,3 +624,93 @@ describe("Event attribution", () => {
     }
   });
 });
+
+// ============================================================
+// Origin immutability: origin_kind records who emitted an intent (operator
+// directly, or an agent by proxy). It is a fact about how the record was
+// emitted, not an editable field — updateIntent must reject it in both
+// repositories, in lockstep.
+// ============================================================
+
+describe("Origin immutability", () => {
+  it("updateIntent does not accept originKind in updates", async () => {
+    for (const repo of repositories()) {
+      try {
+        const caller = await repo.registerActor(
+          { name: "origin-immutability-caller", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(0)
+        );
+
+        const intent = await repo.createIntent(
+          { scope: "default", description: "Origin immutability test", source: "test", originKind: "proxy" },
+          caller.id
+        );
+        expect(intent.originKind).toBe("proxy");
+
+        // TypeScript prevents passing originKind at compile time
+        // (Partial<Omit<Intent, "id" | "createdAt" | "originKind">>). At runtime, verify a
+        // type-system bypass (`as any`) still can't relabel a proxy-authored intent as
+        // operator-direct.
+        const result = await repo.updateIntent(
+          intent.id,
+          { status: "active", originKind: "direct" } as any,
+          "attempting to relabel origin",
+          caller.id
+        );
+
+        if ("code" in result) throw new Error(`Expected Intent, got error: ${result.message}`);
+        expect(result.originKind).toBe("proxy");
+        expect(result.status).toBe("active"); // the legitimate update still applied
+
+        const reread = await repo.getIntent(intent.id);
+        expect(reread?.originKind).toBe("proxy");
+      } finally {
+        if (repo instanceof SqliteGovernanceRepository) repo.close();
+      }
+    }
+  });
+});
+
+// ============================================================
+// SqliteGovernanceRepository row mapping: defends against corrupted or
+// hand-inserted data, not just the shapes the repository itself writes.
+// Columns added via addColumnIfMissing carry no CHECK constraint (SQLite's
+// ALTER TABLE ADD COLUMN cannot carry one), so a junk origin_kind value can
+// reach the row mapper in a real deployment.
+// ============================================================
+
+describe("SqliteGovernanceRepository row mapping", () => {
+  it("reads an invalid stored origin_kind back as proxy", async () => {
+    const repo = new SqliteGovernanceRepository(":memory:");
+    try {
+      const caller = await repo.registerActor(
+        { name: "row-mapping-caller", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+        actorId(0)
+      );
+
+      const intent = await repo.createIntent(
+        { scope: "default", description: "Junk origin_kind test", source: "test", originKind: "direct" },
+        caller.id
+      );
+      expect(intent.originKind).toBe("direct");
+
+      // Simulate a corrupted / hand-inserted row: write a value outside {"direct","proxy"}
+      // directly via SQL. The intents table's origin_kind column carries a CHECK constraint
+      // in the fresh-DB DDL (schema.ts), so it must be disabled to land the junk value —
+      // exactly the gap that exists for real on a DB evolved by addColumnIfMissing, which
+      // never gets that CHECK at all.
+      const db = (repo as unknown as { db: import("node:sqlite").DatabaseSync }).db;
+      db.exec("PRAGMA ignore_check_constraints = ON");
+      db.prepare("UPDATE intents SET origin_kind = ? WHERE id = ?").run("bogus", intent.id);
+      db.exec("PRAGMA ignore_check_constraints = OFF");
+
+      const reread = await repo.getIntent(intent.id);
+      expect(reread?.originKind).toBe("proxy");
+
+      const listed = await repo.listIntents();
+      expect(listed.find((i) => i.id === intent.id)?.originKind).toBe("proxy");
+    } finally {
+      repo.close();
+    }
+  });
+});

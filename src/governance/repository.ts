@@ -109,7 +109,7 @@ export interface GovernanceRepository {
   getIntent(id: IntentId): Promise<IntentEnriched | null>;
   updateIntent(
     id: IntentId,
-    updates: Partial<Omit<Intent, "id" | "createdAt">>,
+    updates: Partial<Omit<Intent, "id" | "createdAt" | "originKind">>,
     reason: string,
     callerActorId: ActorId
   ): Promise<Intent | RepositoryError>;
@@ -336,7 +336,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
 
   async updateIntent(
     id: IntentId,
-    updates: Partial<Omit<Intent, "id" | "createdAt">>,
+    updates: Partial<Omit<Intent, "id" | "createdAt" | "originKind">>,
     reason: string,
     callerActorId: ActorId
   ): Promise<Intent | RepositoryError> {
@@ -347,6 +347,9 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       ...intent,
       ...updates,
       id,
+      // origin is a fact about how the record was emitted, not an editable field — reassert
+      // it after the spread so a type-system bypass (e.g. `as any`) can't smuggle it through.
+      originKind: intent.originKind,
       version: intent.version + 1,
       updatedAt: new Date(),
     };

@@ -88,6 +88,15 @@ function parseSnapshot(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
+function originKindFromRow(value: unknown): OriginKind {
+  // Columns added via addColumnIfMissing carry no CHECK constraint (SQLite's ALTER TABLE
+  // ADD COLUMN cannot carry one), so a corrupted or hand-inserted value outside the enum
+  // would otherwise read back as a validly-typed OriginKind. Treat anything other than the
+  // exact "direct" literal as "proxy" — an unrecognised value is not evidence the operator
+  // emitted it, so the safe default applies.
+  return value === "direct" ? "direct" : "proxy";
+}
+
 function intentFromRow(row: Row): Intent {
   return {
     id: intendId(Number(row.id)),
@@ -96,7 +105,7 @@ function intentFromRow(row: Row): Intent {
     status: String(row.status) as IntentStatus,
     version: Number(row.version),
     source: String(row.source),
-    originKind: (row.origin_kind as OriginKind) ?? "proxy",
+    originKind: originKindFromRow(row.origin_kind),
     addressedTo: row.addressed_to == null ? undefined : actorId(Number(row.addressed_to)),
     parentId: row.parent_id == null ? undefined : intendId(Number(row.parent_id)),
     createdAt: asDate(row.created_at),
@@ -555,13 +564,15 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
 
   async updateIntent(
     id: IntentId,
-    updates: Partial<Omit<Intent, "id" | "createdAt">>,
+    updates: Partial<Omit<Intent, "id" | "createdAt" | "originKind">>,
     reason: string,
     callerActorId: ActorId
   ): Promise<Intent | RepositoryError> {
     const current = await this.getIntent(id);
     if (!current) return { code: "NOT_FOUND", message: `Intent ${id} not found` };
 
+    // origin_kind is deliberately absent from this whitelist and from the UPDATE statement
+    // below — it is a fact about how the record was emitted, not an editable field.
     const next = {
       status: updates.status ?? current.status,
       description: updates.description ?? current.description,

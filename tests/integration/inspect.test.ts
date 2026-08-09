@@ -23,6 +23,7 @@ describe("inspectIntent", () => {
   async function seedRichIntent() {
     // Intent
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Verify M2 output across servers",
       source: "seb",
       scope: "default",
@@ -49,7 +50,7 @@ describe("inspectIntent", () => {
     const interp1 = await service.registerInterpretation({
       intentId,
       domainId: domain.id as number,
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
       title: "SSH to .52 and check outbox",
       status: "proposed",
       alignment: "aligned",
@@ -58,7 +59,7 @@ describe("inspectIntent", () => {
     const interp2 = await service.registerInterpretation({
       intentId,
       domainId: domain.id as number,
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
       title: "Also verify .57 LXC logs",
       status: "clarifying",
       alignment: "uncertain",
@@ -67,7 +68,7 @@ describe("inspectIntent", () => {
     // An action
     await service.logAction({
       intentId,
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
       description: "Checked .52 outbox — M2 files present",
       interpretationId: interp1.ok ? interp1.data.id as number : undefined,
       outcome: "3 JSONL files found",
@@ -77,7 +78,7 @@ describe("inspectIntent", () => {
     await service.registerExpertise({
       intentId,
       domainId: domain.id as number,
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
       signal: "concerned",
       note: "Runtime ops owns server access",
     });
@@ -86,7 +87,7 @@ describe("inspectIntent", () => {
     await service.claim({
       entityTable: "intents",
       entityId: intentId,
-      actorId: actor.id as number,
+      subjectActorId: actor.id as number, callerActorId: actor.id as number,
       note: "Working on verification",
     });
 
@@ -144,6 +145,7 @@ describe("inspectIntent", () => {
 
   it("handles intent with no interpretations or actions", async () => {
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Empty intent for inspection",
       source: "test",
       status: "draft",
@@ -188,6 +190,7 @@ describe("inspectInterpretation", () => {
 
   it("returns interpretation with linked intent, actions, and summary", async () => {
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Run diagnostics",
       source: "seb",
       status: "active",
@@ -203,7 +206,7 @@ describe("inspectInterpretation", () => {
     const interpRes = await service.registerInterpretation({
       intentId: intentRes.data.id as number,
       domainId: domain.id as number,
-      actorId: 1,
+      callerActorId: 1,
       title: "Run disk and memory checks",
       scopeAssumption: "Server .52 only",
       status: "proposed",
@@ -216,7 +219,7 @@ describe("inspectInterpretation", () => {
     // Log an action against this interpretation
     await service.logAction({
       intentId: intentRes.data.id as number,
-      actorId: 1,
+      callerActorId: 1,
       description: "Ran disk check",
       interpretationId: interpId,
       outcome: "85% used",
@@ -249,6 +252,7 @@ describe("inspectInterpretation", () => {
 
   it("marks superseded interpretation correctly in summary", async () => {
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Test intent",
       source: "test",
       status: "active",
@@ -264,7 +268,7 @@ describe("inspectInterpretation", () => {
     const interpRes = await service.registerInterpretation({
       intentId: intentRes.data.id as number,
       domainId: domain.id as number,
-      actorId: 1,
+      callerActorId: 1,
       title: "Original understanding",
       status: "proposed",
     });
@@ -308,6 +312,7 @@ describe("inspectIntentTree", () => {
   it("builds a tree with parent and sub-intents", async () => {
     // Parent directive with delegation sub-intents
     const parentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Build CML-native operating framework",
       source: "seb",
       scope: "default",
@@ -317,6 +322,7 @@ describe("inspectIntentTree", () => {
     const parentId = parentRes.data.id as number;
 
     const sub1Res = await service.registerIntent({
+      callerActorId: 1,
       description: "Node.js + scaffold verify",
       source: "seb",
       scope: "default",
@@ -325,6 +331,7 @@ describe("inspectIntentTree", () => {
     });
 
     const sub2Res = await service.registerIntent({
+      callerActorId: 1,
       description: "Governance store update",
       source: "seb",
       scope: "default",
@@ -333,6 +340,7 @@ describe("inspectIntentTree", () => {
     });
 
     const sub3Res = await service.registerIntent({
+      callerActorId: 1,
       description: "First vertical slice",
       source: "seb",
       scope: "default",
@@ -355,6 +363,7 @@ describe("inspectIntentTree", () => {
 
   it("builds nested delegation (grandchildren)", async () => {
     const rootRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Top-level directive",
       source: "seb",
       scope: "default",
@@ -364,6 +373,7 @@ describe("inspectIntentTree", () => {
     const rootId = rootRes.data.id as number;
 
     const childRes = await service.registerIntent({
+      callerActorId: 1,
       description: "First delegation",
       source: "seb",
       scope: "default",
@@ -374,6 +384,7 @@ describe("inspectIntentTree", () => {
     const childId = childRes.data.id as number;
 
     await service.registerIntent({
+      callerActorId: 1,
       description: "Sub-delegation (grandchild)",
       source: "seb",
       scope: "default",
@@ -393,6 +404,7 @@ describe("inspectIntentTree", () => {
 
   it("includes interpretation and action counts per node", async () => {
     const parentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Parent",
       source: "seb",
       scope: "default",
@@ -402,6 +414,7 @@ describe("inspectIntentTree", () => {
     const parentId = parentRes.data.id as number;
 
     const childRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Child with activity",
       source: "seb",
       scope: "default",
@@ -421,7 +434,7 @@ describe("inspectIntentTree", () => {
     await service.registerInterpretation({
       intentId: childId,
       domainId: domain.id as number,
-      actorId: 1,
+      callerActorId: 1,
       title: "Plan for child",
       status: "proposed",
     });
@@ -429,7 +442,7 @@ describe("inspectIntentTree", () => {
     // Log action on child
     await service.logAction({
       intentId: childId,
-      actorId: 1,
+      callerActorId: 1,
       description: "Did something on child",
     });
 
@@ -448,6 +461,7 @@ describe("inspectIntentTree", () => {
 
   it("handles leaf intent with no children", async () => {
     const leafRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Standalone leaf",
       source: "seb",
       scope: "default",

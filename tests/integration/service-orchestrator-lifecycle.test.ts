@@ -43,6 +43,7 @@ describe("Service → Orchestrator Lifecycle", () => {
   it("completes a full governance lifecycle through service and orchestrator", async () => {
     // 1. Register intent through GovernanceService
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Verify M2 mechiso run output on server",
       source: "seb",
       scope: "default",
@@ -76,7 +77,7 @@ describe("Service → Orchestrator Lifecycle", () => {
     const interpRes = await service.registerInterpretation({
       intentId: intentId as number,
       domainId: domain.id as number,
-      actorId: actorRes.data.id as number,
+      callerActorId: actorRes.data.id as number,
       title: "Check sample workspace outbox for completion markers",
       status: "proposed",
       alignment: "aligned",
@@ -134,6 +135,7 @@ describe("Service → Orchestrator Lifecycle", () => {
   it("executes against a sub-intent created through service", async () => {
     // Parent intent (top-level directive)
     const parentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Complete M2 verification across all servers",
       source: "seb",
       scope: "default",
@@ -144,6 +146,7 @@ describe("Service → Orchestrator Lifecycle", () => {
 
     // Sub-intent (delegation)
     const subRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Check server .52 for M2 run output",
       source: "seb",
       scope: "default",
@@ -187,6 +190,7 @@ describe("Service → Orchestrator Lifecycle", () => {
   it("blocks execution after interpretation is superseded through service", async () => {
     // Set up governance state
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Run diagnostic on server",
       source: "test",
       status: "active",
@@ -202,7 +206,7 @@ describe("Service → Orchestrator Lifecycle", () => {
     const interpRes = await service.registerInterpretation({
       intentId: intentRes.data.id as number,
       domainId: domain.id as number,
-      actorId: 1,
+      callerActorId: 1,
       title: "Run full diagnostic suite",
       status: "proposed",
       alignment: "aligned",
@@ -247,6 +251,7 @@ describe("Service → Orchestrator Lifecycle", () => {
   it("execution is gated by intent status transitions through service", async () => {
     // Create as draft
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Deploy new version",
       source: "test",
       // defaults to "draft"
@@ -269,7 +274,7 @@ describe("Service → Orchestrator Lifecycle", () => {
       id: intentId,
       reason: "Approved for execution",
       status: "active",
-      actorId: 1,
+      callerActorId: 1,
     });
     expect(activateRes.ok).toBe(true);
 
@@ -288,7 +293,7 @@ describe("Service → Orchestrator Lifecycle", () => {
       reason: "Deployment complete",
       status: "closed",
       resolutionNotes: "v2 deployed successfully",
-      actorId: 1,
+      callerActorId: 1,
     });
     expect(closeRes.ok).toBe(true);
 
@@ -307,6 +312,7 @@ describe("Service → Orchestrator Lifecycle", () => {
 
   it("multiple execution steps accumulate actions and events correctly", async () => {
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Multi-step verification",
       source: "test",
       status: "active",
@@ -351,6 +357,7 @@ describe("Service → Orchestrator Lifecycle", () => {
     await service.registerScope({ scope: "consulting", callerActorId: 1 });
 
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Prepare client deliverable for Q2 review",
       source: "ops-lead",
       scope: "consulting",
@@ -367,7 +374,7 @@ describe("Service → Orchestrator Lifecycle", () => {
     const interpRes = await service.registerInterpretation({
       intentId: intentRes.data.id as number,
       domainId: domain.id as number,
-      actorId: 1,
+      callerActorId: 1,
       title: "Generate PDF report from latest data",
       status: "proposed",
       alignment: "aligned",

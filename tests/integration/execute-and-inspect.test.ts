@@ -29,6 +29,7 @@ describe("executeAndInspect", () => {
 
   async function seedState() {
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Verify server health",
       source: "seb",
       status: "active",
@@ -52,7 +53,7 @@ describe("executeAndInspect", () => {
     const interpRes = await service.registerInterpretation({
       intentId: intentRes.data.id as number,
       domainId: domain.id as number,
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
       title: "SSH and run health checks",
       status: "proposed",
       alignment: "aligned",
@@ -154,6 +155,7 @@ describe("executeAndInspect", () => {
 
   it("returns error for non-active intent", async () => {
     const intentRes = await service.registerIntent({
+      callerActorId: 1,
       description: "Draft intent",
       source: "test",
       // defaults to draft

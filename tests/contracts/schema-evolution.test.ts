@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { SqliteGovernanceRepository } from "../../src/governance/sqlite-governance-repository.js";
-import { actorId, domainId } from "../../src/governance/domain.js";
+import { actorId, domainId, intendId, interpretationId, actionId, reportId } from "../../src/governance/domain.js";
 
 // Pre-Task-3 schema (the Task 2 state): intents has origin_kind, but interpretations,
 // actions and reports do not. This simulates a real pre-existing database being opened
@@ -154,11 +154,30 @@ function makeTempDbPath(): string {
 }
 
 describe("origin_kind schema evolution against pre-existing databases", () => {
-  it("adds origin_kind to interpretations, actions and reports on a database that already has a reports table", () => {
+  it("adds origin_kind to interpretations, actions and reports on a database that already has a reports table", async () => {
     const dbPath = makeTempDbPath();
     try {
       const seed = new DatabaseSync(dbPath);
       seed.exec(OLD_SCHEMA_WITH_REPORTS);
+      // Seed one pre-existing row per table under test — the case that actually matters
+      // on the production host (17 actors, hundreds of existing rows). These rows are
+      // written before origin_kind exists on interpretations/actions/reports, so their
+      // origin_kind must come from the ALTER TABLE ... NOT NULL DEFAULT 'proxy' backfill,
+      // not from an application-level default.
+      seed.exec(`
+        INSERT INTO actors (id, name, role, provider, capability_namespace, default_scope)
+          VALUES (1, 'pre-existing-actor', 'agent', 'test', 'test', 'default');
+        INSERT INTO domains (id, scope, name, concern)
+          VALUES (1, 'default', 'pre-existing-domain', 'test');
+        INSERT INTO intents (id, scope, description, source)
+          VALUES (1, 'default', 'pre-existing intent', 'test');
+        INSERT INTO interpretations (id, intent_id, domain_id, actor_id, title)
+          VALUES (1, 1, 1, 1, 'pre-existing interpretation');
+        INSERT INTO actions (id, intent_id, actor_id, description)
+          VALUES (1, 1, 1, 'pre-existing action');
+        INSERT INTO reports (id, scope, kind, title, summary, actor_id)
+          VALUES (1, 'default', 'note', 'pre-existing report', 'pre-existing summary', 1);
+      `);
       seed.close();
 
       // Opening with the current code must not throw, and must add origin_kind everywhere.
@@ -171,6 +190,18 @@ describe("origin_kind schema evolution against pre-existing databases", () => {
         expect(cols("interpretations").has("origin_kind")).toBe(true);
         expect(cols("actions").has("origin_kind")).toBe(true);
         expect(cols("reports").has("origin_kind")).toBe(true);
+
+        // The pre-existing rows — written before the migration ran — must be backfilled
+        // to 'proxy' by the ALTER TABLE default, and the row mappers must read that back.
+        const intent = await repo.getIntent(intendId(1));
+        expect(intent?.originKind).toBe("proxy");
+        const interp = await repo.getInterpretation(interpretationId(1));
+        expect(interp?.originKind).toBe("proxy");
+        const action = await repo.getAction(actionId(1));
+        expect(action?.originKind).toBe("proxy");
+        const report = await repo.getReport(reportId(1));
+        expect(report?.originKind).toBe("proxy");
+        expect(report?.unmandatedReason).toBeUndefined();
       } finally {
         repo.close();
       }
@@ -191,6 +222,23 @@ describe("origin_kind schema evolution against pre-existing databases", () => {
       );
       expect(withoutReports).not.toContain("CREATE TABLE IF NOT EXISTS reports");
       seed.exec(withoutReports);
+      // Seed one pre-existing row per table under test, same rationale as the fixture
+      // above: the migration's ALTER TABLE ... NOT NULL DEFAULT 'proxy' must backfill
+      // rows that already existed, not just apply to rows created after evolution.
+      // (No reports table exists yet in this fixture, so it can't carry a pre-existing
+      // row — its origin_kind coverage is exercised by the fixture above instead.)
+      seed.exec(`
+        INSERT INTO actors (id, name, role, provider, capability_namespace, default_scope)
+          VALUES (1, 'pre-existing-actor', 'agent', 'test', 'test', 'default');
+        INSERT INTO domains (id, scope, name, concern)
+          VALUES (1, 'default', 'pre-existing-domain', 'test');
+        INSERT INTO intents (id, scope, description, source)
+          VALUES (1, 'default', 'pre-existing intent', 'test');
+        INSERT INTO interpretations (id, intent_id, domain_id, actor_id, title)
+          VALUES (1, 1, 1, 1, 'pre-existing interpretation');
+        INSERT INTO actions (id, intent_id, actor_id, description)
+          VALUES (1, 1, 1, 'pre-existing action');
+      `);
       seed.close();
 
       // Must not throw despite the missing reports table — this is exactly what the
@@ -206,13 +254,22 @@ describe("origin_kind schema evolution against pre-existing databases", () => {
         expect(cols("interpretations").has("origin_kind")).toBe(true);
         expect(cols("actions").has("origin_kind")).toBe(true);
 
+        // The pre-existing rows — written before the migration ran — must be backfilled
+        // to 'proxy' by the ALTER TABLE default, and the row mappers must read that back.
+        const preExistingIntent = await repo.getIntent(intendId(1));
+        expect(preExistingIntent?.originKind).toBe("proxy");
+        const preExistingInterp = await repo.getInterpretation(interpretationId(1));
+        expect(preExistingInterp?.originKind).toBe("proxy");
+        const preExistingAction = await repo.getAction(actionId(1));
+        expect(preExistingAction?.originKind).toBe("proxy");
+
         // And the repository is fully functional end to end after evolution.
-        // Self-attributed: the fixture pre-seeds a 'default' scope row but no actors, so
-        // this is the first (and only) actor in the evolved db — nothing else could have
-        // caused its registration event. actorId(1) is the id this insert always receives.
+        // Self-attributed via the "self" sentinel: this actor is registered after the
+        // pre-existing actor above (id 1), so it does not receive id 1 — "self" resolves
+        // to whatever id the insert actually gets, rather than predicting it.
         const actor = await repo.registerActor(
           { name: "evo-actor", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
-          actorId(1)
+          "self"
         );
         await repo.registerDomain({ scope: "default", name: "evo-domain", concern: "test" }, actor.id);
         const intent = await repo.createIntent(
@@ -308,6 +365,39 @@ describe("unmandated_reason schema evolution against pre-existing databases", ()
 
         const reread = await repo.getReport(report.id);
         expect(reread?.unmandatedReason).toBe("standalone observation, no active intent");
+      } finally {
+        repo.close();
+      }
+    } finally {
+      rmSync(path.dirname(dbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("backfills unmandated_reason as undefined for a report that pre-dates the column", async () => {
+    // A genuinely pre-existing report row — written by the current code before
+    // unmandated_reason is dropped below to simulate an older database — must survive
+    // the round trip and read back as undefined, not as an empty string or a throw.
+    const dbPath = makeTempDbPath();
+    try {
+      const seed = new SqliteGovernanceRepository(dbPath);
+      const actor = await seed.registerActor(
+        { name: "pre-existing-mandate-actor", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+        "self"
+      );
+      const report = await seed.registerReport(
+        { scope: "default", kind: "note", title: "pre-existing report", summary: "s", actorId: actor.id, originKind: "proxy" },
+        actor.id
+      );
+      seed.close();
+
+      const raw = new DatabaseSync(dbPath);
+      raw.exec("ALTER TABLE reports DROP COLUMN unmandated_reason");
+      raw.close();
+
+      const repo = new SqliteGovernanceRepository(dbPath);
+      try {
+        const reread = await repo.getReport(report.id);
+        expect(reread?.unmandatedReason).toBeUndefined();
       } finally {
         repo.close();
       }

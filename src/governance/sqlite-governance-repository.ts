@@ -128,6 +128,7 @@ function interpretationFromRow(row: Row): Interpretation {
     resolveBy: row.resolve_by == null ? undefined : asDate(row.resolve_by),
     supersededBy: row.superseded_by == null ? undefined : interpretationId(Number(row.superseded_by)),
     sourceRef: asString(row.source_ref),
+    originKind: originKindFromRow(row.origin_kind),
     createdAt: asDate(row.created_at),
     updatedAt: asDate(row.updated_at),
   };
@@ -146,6 +147,7 @@ function actionFromRow(row: Row): Action {
     policyRef: asString(row.policy_ref),
     description: String(row.description),
     outcome: asString(row.outcome),
+    originKind: originKindFromRow(row.origin_kind),
     createdAt: asDate(row.created_at),
   };
 }
@@ -309,6 +311,7 @@ function reportFromRow(row: Row): Report {
     domainId: row.domain_id == null ? undefined : domainId(Number(row.domain_id)),
     intentId: row.intent_id == null ? undefined : intendId(Number(row.intent_id)),
     sourceRef: asString(row.source_ref),
+    originKind: originKindFromRow(row.origin_kind),
     createdAt: asDate(row.created_at),
   };
 }
@@ -373,7 +376,11 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     const invocationSchemaCurrent = ["assumed_role", "invoked_skill_ref", "policy_ref"]
       .every((column) => actionColumns.has(column) && reportColumns.has(column));
     const intentColumns = this.tableColumns("intents");
-    const originSchemaCurrent = intentColumns.has("origin_kind");
+    const originSchemaCurrent =
+      intentColumns.has("origin_kind") &&
+      this.tableColumns("interpretations").has("origin_kind") &&
+      actionColumns.has("origin_kind") &&
+      (!hasReports || reportColumns.has("origin_kind"));
     if (
       actorSchemaCurrent &&
       hasActorSessions &&
@@ -406,6 +413,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       this.addColumnIfMissing("actions", "domain_id", "domain_id INTEGER REFERENCES domains(id)");
       this.addColumnIfMissing("actions", "governing_contract_key", "governing_contract_key TEXT");
       this.addColumnIfMissing("intents", "origin_kind", "origin_kind TEXT NOT NULL DEFAULT 'proxy'");
+      this.addColumnIfMissing("interpretations", "origin_kind", "origin_kind TEXT NOT NULL DEFAULT 'proxy'");
+      this.addColumnIfMissing("actions", "origin_kind", "origin_kind TEXT NOT NULL DEFAULT 'proxy'");
       this.db.exec("UPDATE actors SET created_at = COALESCE(created_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')), updated_at = COALESCE(updated_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))");
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS roles (
@@ -515,6 +524,7 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       this.addColumnIfMissing("reports", "assumed_role", "assumed_role TEXT");
       this.addColumnIfMissing("reports", "invoked_skill_ref", "invoked_skill_ref TEXT");
       this.addColumnIfMissing("reports", "policy_ref", "policy_ref TEXT");
+      this.addColumnIfMissing("reports", "origin_kind", "origin_kind TEXT NOT NULL DEFAULT 'proxy'");
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -641,8 +651,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
   ): Promise<Interpretation> {
     const result = this.db.prepare(
       `INSERT INTO interpretations
-       (intent_id, domain_id, actor_id, title, scope_assumption, alignment, status, resolver_id, resolve_by, source_ref)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (intent_id, domain_id, actor_id, title, scope_assumption, alignment, status, resolver_id, resolve_by, source_ref, origin_kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       interpretation.intentId,
       interpretation.domainId,
@@ -653,7 +663,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       interpretation.status ?? "clarifying",
       interpretation.resolverId ?? null,
       toDbDate(interpretation.resolveBy),
-      interpretation.sourceRef ?? null
+      interpretation.sourceRef ?? null,
+      interpretation.originKind ?? "proxy"
     );
     const created = await this.getInterpretation(interpretationId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted interpretation could not be read back");
@@ -678,12 +689,14 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
 
   async updateInterpretation(
     id: InterpretationId,
-    updates: Partial<Omit<Interpretation, "id" | "createdAt" | "title">>,
+    updates: Partial<Omit<Interpretation, "id" | "createdAt" | "title" | "originKind">>,
     reason: string,
     callerActorId: ActorId
   ): Promise<Interpretation | RepositoryError> {
     const current = await this.getInterpretation(id);
     if (!current) return { code: "NOT_FOUND", message: `Interpretation ${id} not found` };
+    // origin_kind is deliberately absent from this UPDATE statement — it is a fact about
+    // how the record was emitted, not an editable field.
     this.db.prepare(
       `UPDATE interpretations
        SET status = ?, alignment = ?, resolver_id = ?, resolve_by = ?, superseded_by = ?,
@@ -791,8 +804,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     const result = this.db.prepare(
       `INSERT INTO actions
        (intent_id, interpretation_id, actor_id, domain_id, governing_contract_key,
-        assumed_role, invoked_skill_ref, policy_ref, description, outcome)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        assumed_role, invoked_skill_ref, policy_ref, description, outcome, origin_kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       action.intentId,
       action.interpretationId ?? null,
@@ -803,7 +816,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       action.invokedSkillRef ?? null,
       action.policyRef ?? null,
       action.description,
-      action.outcome ?? null
+      action.outcome ?? null,
+      action.originKind ?? "proxy"
     );
     const created = await this.getAction(actionId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted action could not be read back");
@@ -1400,8 +1414,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
   async registerReport(report: ReportCreate, callerActorId: ActorId): Promise<Report> {
     const result = this.db.prepare(
       `INSERT INTO reports
-       (scope, kind, title, summary, body_ref, actor_id, assumed_role, invoked_skill_ref, policy_ref, domain_id, intent_id, source_ref)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (scope, kind, title, summary, body_ref, actor_id, assumed_role, invoked_skill_ref, policy_ref, domain_id, intent_id, source_ref, origin_kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       report.scope,
       report.kind,
@@ -1414,7 +1428,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       report.policyRef ?? null,
       report.domainId ?? null,
       report.intentId ?? null,
-      report.sourceRef ?? null
+      report.sourceRef ?? null,
+      report.originKind ?? "proxy"
     );
     const created = await this.getReport(reportId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted report could not be read back");

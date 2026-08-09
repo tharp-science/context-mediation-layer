@@ -71,6 +71,36 @@ describe("GovernanceService", () => {
       if (!result.ok) return;
       expect(result.data.originKind).toBe("direct");
     });
+
+    it("stamps origin on interpretations, actions and reports", async () => {
+      const repo = new InMemoryGovernanceRepository();
+      const svc = new GovernanceService(repo, { origin: "direct" });
+      // registerReport (unlike registerInterpretation/logAction) requires a real
+      // registered actor, so seed one rather than using a bare numeric actorId.
+      const actor = await svc.registerActor({
+        name: "origin-test-actor",
+        role: "agent",
+        provider: "openai-codex",
+        capabilityNamespace: "build",
+      });
+      if (!actor.ok) throw new Error("actor register failed");
+      const intent = await svc.registerIntent({ description: "Parent", source: "test", actorId: actor.data.id });
+      if (!intent.ok) throw new Error("intent failed");
+
+      const interp = await svc.registerInterpretation({
+        intentId: intent.data.id, domainId: 1, actorId: actor.data.id, title: "I",
+      });
+      const action = await svc.logAction({
+        intentId: intent.data.id, actorId: actor.data.id, description: "A",
+      });
+      const report = await svc.registerReport({
+        kind: "note", title: "R", summary: "S", actorId: actor.data.id,
+      });
+
+      expect(interp.ok && interp.data.originKind).toBe("direct");
+      expect(action.ok && action.data.originKind).toBe("direct");
+      expect(report.ok && report.data.originKind).toBe("direct");
+    });
   });
 
   // ----------------------------------------------------------

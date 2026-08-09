@@ -126,7 +126,7 @@ export interface GovernanceRepository {
   getInterpretation(id: InterpretationId): Promise<InterpretationEnriched | null>;
   updateInterpretation(
     id: InterpretationId,
-    updates: Partial<Omit<Interpretation, "id" | "createdAt" | "title">>,
+    updates: Partial<Omit<Interpretation, "id" | "createdAt" | "title" | "originKind">>,
     reason: string,
     callerActorId: ActorId
   ): Promise<Interpretation | RepositoryError>;
@@ -391,6 +391,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       ...interpretation,
       status: interpretation.status ?? "clarifying",
       alignment: interpretation.alignment ?? "uncertain",
+      originKind: interpretation.originKind ?? "proxy",
       id,
       createdAt: now,
       updatedAt: now,
@@ -416,7 +417,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
 
   async updateInterpretation(
     id: InterpretationId,
-    updates: Partial<Omit<Interpretation, "id" | "createdAt" | "title">>,
+    updates: Partial<Omit<Interpretation, "id" | "createdAt" | "title" | "originKind">>,
     reason: string,
     callerActorId: ActorId
   ): Promise<Interpretation | RepositoryError> {
@@ -429,6 +430,9 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       ...interp,
       ...updates,
       id,
+      // origin is a fact about how the record was emitted, not an editable field — reassert
+      // it after the spread so a type-system bypass (e.g. `as any`) can't smuggle it through.
+      originKind: interp.originKind,
       updatedAt: new Date(),
     };
 
@@ -461,6 +465,10 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       scopeAssumption: newScopeAssumption,
       alignment: "uncertain",
       status: newStatus ?? "clarifying",
+      // Not stamped from service origin here — Task 4 handles the replacement row's
+      // origin together with the reports work. Defaults to "proxy", matching the SQLite
+      // side's schema default when the INSERT omits the column.
+      originKind: "proxy",
       createdAt: now,
       updatedAt: now,
     };
@@ -506,6 +514,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     const id = actionId(this.nextActionId++);
     const record: Action = {
       ...action,
+      originKind: action.originKind ?? "proxy",
       id,
       createdAt: new Date(),
     };
@@ -978,7 +987,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
 
   async registerReport(report: ReportCreate, callerActorId: ActorId): Promise<Report> {
     const id = reportId(this.nextReportId++);
-    const record: Report = { ...report, id, createdAt: new Date() };
+    const record: Report = { ...report, originKind: report.originKind ?? "proxy", id, createdAt: new Date() };
     this.reports.set(id, record);
     // Bug fix: this used to name report.actorId instead of the caller.
     await this.emitEvent("report_created", "reports", id, callerActorId, {

@@ -227,6 +227,7 @@ export interface Interpretation {
   resolveBy?: Date; // deadline if one is set
   supersededBy?: InterpretationId; // link to replacement if superseded
   sourceRef?: string; // thread/session that emitted this
+  originKind: OriginKind; // who emitted this record: operator directly, or by proxy
   createdAt: Date;
   updatedAt: Date;
 }
@@ -253,6 +254,7 @@ export interface Action {
   policyRef?: string;
   description: string; // what was done
   outcome?: string; // result or verification
+  originKind: OriginKind; // who emitted this record: operator directly, or by proxy
   createdAt: Date;
 }
 
@@ -307,6 +309,7 @@ export interface Report {
   domainId?: DomainId;
   intentId?: IntentId;
   sourceRef?: string;
+  originKind: OriginKind; // who emitted this record: operator directly, or by proxy
   createdAt: Date;
 }
 

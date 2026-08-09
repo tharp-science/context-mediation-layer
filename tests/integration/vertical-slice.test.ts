@@ -59,6 +59,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
       title: "SSH to server, check outbox for completed run files",
       status: "proposed",
       alignment: "aligned",
+      originKind: "proxy",
     }, actorId(1));
 
     return { intent, interp };
@@ -296,6 +297,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
       title: "Belongs to other intent",
       status: "proposed",
       alignment: "aligned",
+      originKind: "proxy",
     }, actorId(1));
 
     const result = await orchestrator.executeStep({
@@ -415,6 +417,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
       title: "Run deploy script against staging cluster",
       status: "proposed",
       alignment: "aligned",
+      originKind: "proxy",
     }, actorId(2));
 
     const result = await orchestrator.executeStep({

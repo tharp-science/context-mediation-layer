@@ -195,6 +195,7 @@ if (command === "create") {
       alignment: "aligned",
       status: "proposed",
       sourceRef: "test",
+      originKind: "proxy",
     }, actorId(1));
 
     const list = await post({

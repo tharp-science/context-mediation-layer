@@ -157,6 +157,7 @@ async function fixture() {
     title: "Divergent reading A",
     status: "flagged",
     alignment: "divergent",
+    originKind: "proxy",
   }, actorId(1));
   await repo.createInterpretation({
     intentId: intendId(1),
@@ -165,6 +166,7 @@ async function fixture() {
     title: "Divergent reading B",
     status: "proposed",
     alignment: "divergent",
+    originKind: "proxy",
   }, actorId(1));
   await repo.createInterpretation({
     intentId: intendId(1),
@@ -173,6 +175,7 @@ async function fixture() {
     title: "Old reading",
     status: "proposed",
     alignment: "uncertain",
+    originKind: "proxy",
   }, actorId(1));
   await repo.supersedeInterpretation(interpretationId(3), "Replacement reading", "Runtime test", undefined, undefined, actorId(1));
   return { repo, service: new GovernanceService(repo) };

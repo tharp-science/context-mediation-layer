@@ -75,6 +75,7 @@ describe("InMemoryGovernanceRepository", () => {
       title: "Test interpretation",
       alignment: "uncertain",
       status: "clarifying",
+      originKind: "proxy",
     }, actorId(1));
 
     const listed = await repo.listInterpretations({ intentId: intent.id });
@@ -98,6 +99,7 @@ describe("InMemoryGovernanceRepository", () => {
       title: "Interpretation",
       alignment: "uncertain",
       status: "clarifying",
+      originKind: "proxy",
     }, actorId(1));
 
     // The repository allows any valid status value; no transition enforcement.
@@ -124,6 +126,7 @@ describe("InMemoryGovernanceRepository", () => {
       intentId: intent.id,
       actorId: actorId(1),
       description: "Did something",
+      originKind: "proxy",
     }, actorId(1));
 
     const retrieved = await repo.getAction(action.id);
@@ -184,6 +187,7 @@ describe("Governance store updates", () => {
       domainId: domainId(1),
       actorId: actorId(1),
       title: "Original interpretation",
+      originKind: "proxy",
     }, actorId(1));
     return { intent, interp };
   }
@@ -327,6 +331,7 @@ describe("Governance store updates", () => {
         title: "Aligned view",
         alignment: "aligned",
         status: "proposed",
+        originKind: "proxy",
       }, actorId(1));
 
       await repo.createInterpretation({
@@ -336,6 +341,7 @@ describe("Governance store updates", () => {
         title: "Divergent view",
         alignment: "divergent",
         status: "proposed",
+        originKind: "proxy",
       }, actorId(2));
 
       const divergent = await repo.listInterpretations({ alignment: "divergent" });
@@ -387,6 +393,7 @@ describe("Governance store updates", () => {
         domainId: domainId(1),
         actorId: actorId(1),
         title: "No status or alignment",
+        originKind: "proxy",
       }, actorId(1));
 
       expect(interp.status).toBe("clarifying");
@@ -408,6 +415,7 @@ describe("Governance store updates", () => {
         title: "Explicit values",
         status: "proposed",
         alignment: "aligned",
+        originKind: "proxy",
       }, actorId(1));
 
       expect(interp.status).toBe("proposed");
@@ -434,12 +442,14 @@ describe("Governance store updates", () => {
         domainId: domainId(1),
         actorId: actorId(1),
         title: "Interp 1",
+        originKind: "proxy",
       }, actorId(1));
       await repo.createInterpretation({
         intentId: intent.id,
         domainId: domainId(2),
         actorId: actorId(2),
         title: "Interp 2",
+        originKind: "proxy",
       }, actorId(2));
 
       // Add expertise signal
@@ -474,6 +484,7 @@ describe("Governance store updates", () => {
         domainId: domainId(1),
         actorId: actorId(1),
         title: "With actions",
+        originKind: "proxy",
       }, actorId(1));
 
       await repo.logAction({
@@ -481,6 +492,7 @@ describe("Governance store updates", () => {
         interpretationId: interp.id,
         actorId: actorId(1),
         description: "Action linked to interp",
+        originKind: "proxy",
       }, actorId(1));
 
       const enriched = await repo.getInterpretation(interp.id);
@@ -596,7 +608,7 @@ describe("Event attribution", () => {
           author.id
         );
         const interp = await repo.createInterpretation(
-          { intentId: intent.id, domainId: domain.id, actorId: author.id, title: "by author" },
+          { intentId: intent.id, domainId: domain.id, actorId: author.id, title: "by author", originKind: "proxy" },
           author.id
         );
 
@@ -663,6 +675,50 @@ describe("Origin immutability", () => {
         expect(result.status).toBe("active"); // the legitimate update still applied
 
         const reread = await repo.getIntent(intent.id);
+        expect(reread?.originKind).toBe("proxy");
+      } finally {
+        if (repo instanceof SqliteGovernanceRepository) repo.close();
+      }
+    }
+  });
+
+  it("updateInterpretation does not accept originKind in updates", async () => {
+    for (const repo of repositories()) {
+      try {
+        const caller = await repo.registerActor(
+          { name: "interp-origin-immutability-caller", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(0)
+        );
+        const domain = await repo.registerDomain(
+          { scope: "default", name: "interp-origin-immutability-domain", concern: "test" },
+          caller.id
+        );
+        const intent = await repo.createIntent(
+          { scope: "default", description: "Parent for origin immutability test", source: "test", originKind: "proxy" },
+          caller.id
+        );
+        const interp = await repo.createInterpretation(
+          { intentId: intent.id, domainId: domain.id, actorId: caller.id, title: "Interp origin immutability", originKind: "proxy" },
+          caller.id
+        );
+        expect(interp.originKind).toBe("proxy");
+
+        // TypeScript prevents passing originKind at compile time
+        // (Partial<Omit<Interpretation, "id" | "createdAt" | "title" | "originKind">>). At
+        // runtime, verify a type-system bypass (`as any`) still can't relabel a
+        // proxy-authored interpretation as operator-direct.
+        const result = await repo.updateInterpretation(
+          interp.id,
+          { status: "proposed", originKind: "direct" } as any,
+          "attempting to relabel origin",
+          caller.id
+        );
+
+        if ("code" in result) throw new Error(`Expected Interpretation, got error: ${result.message}`);
+        expect(result.originKind).toBe("proxy");
+        expect(result.status).toBe("proposed"); // the legitimate update still applied
+
+        const reread = await repo.getInterpretation(interp.id);
         expect(reread?.originKind).toBe("proxy");
       } finally {
         if (repo instanceof SqliteGovernanceRepository) repo.close();

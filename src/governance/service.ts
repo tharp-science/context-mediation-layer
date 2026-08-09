@@ -299,6 +299,7 @@ export class GovernanceService {
       sourceRef: params.sourceRef,
       resolverId: params.resolverId != null ? toActorId(params.resolverId) : undefined,
       resolveBy: params.resolveBy ? new Date(params.resolveBy) : undefined,
+      originKind: this.origin,
     }, toActorId(params.actorId));
     return success(interp);
   }
@@ -431,6 +432,7 @@ export class GovernanceService {
       policyRef: params.policyRef,
       interpretationId: params.interpretationId != null ? toInterpretationId(params.interpretationId) : undefined,
       outcome: params.outcome,
+      originKind: this.origin,
     }, toActorId(params.actorId));
     return success(action);
   }
@@ -1107,6 +1109,7 @@ export class GovernanceService {
       domainId: params.domainId != null ? toDomainId(params.domainId) : undefined,
       intentId: params.intentId != null ? intendId(params.intentId) : undefined,
       sourceRef: params.sourceRef,
+      originKind: this.origin,
     }, actor.id);
     return success(report);
   }

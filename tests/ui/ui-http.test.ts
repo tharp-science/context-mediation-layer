@@ -41,6 +41,7 @@ describe("cml-ui HTTP surface", () => {
       status: "proposed",
       alignment: "aligned",
       sourceRef: "test",
+      originKind: "proxy",
     }, actorId(1));
 
     server = createCmlUiServer({

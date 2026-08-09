@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { isValidClaimTransition } from "../../src/governance/domain.js";
 import { GovernanceRepository, InMemoryGovernanceRepository } from "../../src/governance/repository.js";
 import { SqliteGovernanceRepository } from "../../src/governance/sqlite-governance-repository.js";
+import { GovernanceService } from "../../src/governance/service.js";
 import { actorId, domainId, intendId, interpretationId } from "../../src/governance/domain.js";
 
 // Fresh instance of each repository implementation, so cross-repository invariants can be
@@ -1025,6 +1026,109 @@ describe("Contract event attribution", () => {
         expect(registered.length).toBeGreaterThanOrEqual(2);
         expect(registered[registered.length - 1].actorId).toBe(caller.id);
         expect(registered[registered.length - 1].actorId).not.toBe(custodian.id);
+      } finally {
+        if (repo instanceof SqliteGovernanceRepository) repo.close();
+      }
+    }
+  });
+});
+
+// ============================================================
+// GovernanceService origin threading: the tests above exercise origin_kind at
+// the repository layer directly (both implementations, given an explicit
+// originKind on create). What they don't cover is the service layer that
+// actually decides the value in production — GovernanceService reads its
+// constructor's { origin } option once and stamps every write with it. This
+// closes that gap across both repository implementations, so a SQLite INSERT
+// or row mapper that silently dropped the service-supplied origin would fail
+// here even though the InMemory path (and the repository-level tests above)
+// would still pass.
+// ============================================================
+
+describe("GovernanceService origin threading", () => {
+  it("both repositories default origin_kind to proxy and round-trip direct", async () => {
+    for (const repo of repositories()) {
+      try {
+        // Self-attributed: the first actor in a fresh, actor-less repository (see the
+        // comment on the "superseding attributes..." test above for why actorId(1)).
+        // events.actor_id is a NOT NULL FK in the SQLite implementation, so registerIntent
+        // needs a real caller to attribute its event to, not a bare numeric id.
+        const caller = await repo.registerActor(
+          { name: "origin-threading-caller", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(1)
+        );
+
+        const defaultSvc = new GovernanceService(repo);
+        const proxyCreated = await defaultSvc.registerIntent({ description: "p", source: "s", callerActorId: caller.id });
+        expect(proxyCreated.ok).toBe(true);
+        if (!proxyCreated.ok) continue;
+        expect(proxyCreated.data.originKind).toBe("proxy");
+
+        const directSvc = new GovernanceService(repo, { origin: "direct" });
+        const created = await directSvc.registerIntent({ description: "d", source: "s", callerActorId: caller.id });
+        expect(created.ok).toBe(true);
+        if (!created.ok) continue;
+        expect(created.data.originKind).toBe("direct");
+
+        const readBack = await directSvc.getIntent(created.data.id);
+        expect(readBack.ok).toBe(true);
+        if (!readBack.ok) continue;
+        expect(readBack.data.originKind).toBe("direct");
+      } finally {
+        if (repo instanceof SqliteGovernanceRepository) repo.close();
+      }
+    }
+  });
+
+  it("threads origin_kind through interpretations, actions and reports in both repositories, verified on read-back", async () => {
+    for (const repo of repositories()) {
+      try {
+        // Self-attributed, as above.
+        const caller = await repo.registerActor(
+          { name: "origin-threading-caller-2", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(1)
+        );
+        const svc = new GovernanceService(repo, { origin: "direct" });
+
+        const domain = await svc.registerDomain({ scope: "default", name: "origin-threading-domain", concern: "test", callerActorId: caller.id });
+        expect(domain.ok).toBe(true);
+        if (!domain.ok) continue;
+
+        const intent = await svc.registerIntent({ description: "parent", source: "s", callerActorId: caller.id });
+        expect(intent.ok).toBe(true);
+        if (!intent.ok) continue;
+
+        const interp = await svc.registerInterpretation({
+          intentId: intent.data.id, domainId: domain.data.id, callerActorId: caller.id, title: "origin-threading interpretation",
+        });
+        expect(interp.ok).toBe(true);
+        if (!interp.ok) continue;
+        expect(interp.data.originKind).toBe("direct");
+        // The read-back is the load-bearing assertion: origin_kind's SQLite column default
+        // is 'proxy', so an INSERT that silently dropped the value would still pass a check
+        // against the create response's echoed input, but would fail this re-read.
+        const interpReadBack = await svc.getInterpretation(interp.data.id);
+        expect(interpReadBack.ok).toBe(true);
+        if (interpReadBack.ok) expect(interpReadBack.data.originKind).toBe("direct");
+
+        const action = await svc.logAction({ intentId: intent.data.id, callerActorId: caller.id, description: "origin-threading action" });
+        expect(action.ok).toBe(true);
+        if (!action.ok) continue;
+        expect(action.data.originKind).toBe("direct");
+        const actionsReadBack = await svc.listActions({ intentId: intent.data.id });
+        expect(actionsReadBack.ok).toBe(true);
+        if (actionsReadBack.ok) {
+          const found = actionsReadBack.data.find((a) => a.id === action.data.id);
+          expect(found?.originKind).toBe("direct");
+        }
+
+        const report = await svc.registerReport({ kind: "note", title: "R", summary: "S", callerActorId: caller.id });
+        expect(report.ok).toBe(true);
+        if (!report.ok) continue;
+        expect(report.data.originKind).toBe("direct");
+        const reportReadBack = await svc.getReport(report.data.id);
+        expect(reportReadBack.ok).toBe(true);
+        if (reportReadBack.ok) expect(reportReadBack.data.originKind).toBe("direct");
       } finally {
         if (repo instanceof SqliteGovernanceRepository) repo.close();
       }

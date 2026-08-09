@@ -42,6 +42,30 @@ content hash, parent key, and supersession links. State changes can be
 recorded as events with entity table, entity id, actor, reason, snapshot, and
 timestamp.
 
+Every intent, interpretation, action, and report carries `origin_kind`:
+`direct` when the operator emitted the record through their own surface,
+`proxy` when an agent or another surface emitted it on someone's behalf. The
+value is derived from transport — the CLI's `--origin` flag or `CML_ORIGIN`,
+threaded through the `GovernanceService` constructor that every adapter
+(CLI, MCP, SDK, UI) owns explicitly — so it is assertable rather than proven:
+anything with shell access on the operator's machine can present as `direct`.
+It closes the case where agent-authored records are silently indistinguishable
+from operator-authored ones; it does not stop a determined actor from
+misrepresenting themselves, and any surface that displays `origin_kind`
+should say so rather than imply certainty. A signing key would close that
+remaining gap without changing any read path, and it is deferred rather than
+missing by oversight.
+
+Mandate is a separate question from origin, and is answered by `intent_id`,
+not `origin_kind`. `interpretations.intent_id` and `actions.intent_id` are
+NOT NULL — an interpretation or action always names the intent that
+authorises it. `reports.intent_id` is nullable, because a report can stand
+on its own; when it does, `unmandated_reason` records that the absence of a
+mandate was a decision, and says why. A report with `unmandated_reason`
+present is claiming deliberate independence; one with a null `intent_id` and
+no `unmandated_reason` is simply unrecorded, and nothing in the read path
+guesses retroactively about which legacy rows meant which.
+
 ## Component boundaries
 
 The governance service (`src/governance/service.ts`) is the centre. CLI, MCP,

@@ -77,7 +77,7 @@ export class CmlClient {
       this.ownsRepo = true;
     }
 
-    this.service = new GovernanceService(this.repo);
+    this.service = new GovernanceService(this.repo, { origin: "proxy" });
     this.vaultService = new ObsidianVaultService({
       obsidianBin: options.obsidianBin ?? env.CML_OBSIDIAN_BIN,
       vaultName: options.vaultName ?? env.CML_OBSIDIAN_VAULT,

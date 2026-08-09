@@ -91,6 +91,10 @@ export class CmlRemoteMcpClient {
   get vault() {
     return {
       read: (params: { path: string }) => this.callTool("vault_read", params),
+      find: (params: { query: string; path?: string; limit?: number; format?: "text" | "json" }) =>
+        this.callTool("vault_find", params),
+      resolve: (params: { query: string; path?: string; limit?: number; format?: "text" | "json" }) =>
+        this.callTool("vault_resolve", params),
       search: (params: { query: string; path?: string; limit?: number; format?: "text" | "json" }) =>
         this.callTool("vault_search", params),
     };

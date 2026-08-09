@@ -14,6 +14,7 @@ import {
   renderMediationCentreRuntime,
   renderOperatorRuntime,
 } from "./runtime.js";
+import { firstEnv } from "../config/env.js";
 
 interface CmlUiOptions {
   dbPath?: string;
@@ -580,10 +581,6 @@ function parsePort(value: string | undefined): number {
   const port = Number(value ?? "8792");
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("CML_UI_PORT must be a valid port");
   return port;
-}
-
-function firstEnv(...names: string[]): string | undefined {
-  return names.map((name) => process.env[name]).find((value): value is string => Boolean(value));
 }
 
 function main(): void {

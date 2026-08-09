@@ -19,7 +19,8 @@ import {
   OriginKind,
 } from "../governance/domain.js";
 import { inspectIntent, inspectInterpretation } from "../orchestration/inspect.js";
-import { ObsidianVaultService } from "../vault/obsidian-vault-service.js";
+import { ObsidianVaultService, VaultCommandResult, VaultMutationManifest } from "../vault/obsidian-vault-service.js";
+import { envValue } from "../config/env.js";
 
 interface CliContext {
   service: GovernanceService;
@@ -179,7 +180,7 @@ function asConfig(value: unknown): CmlConfig {
 }
 
 function loadConfig(flags: Flags, allowMissingExplicit = false): ConfigBundle {
-  const explicitPath = flag(flags, "config") ?? process.env.CML_CONFIG;
+  const explicitPath = flag(flags, "config") ?? envValue("CML_CONFIG");
   const candidate = explicitPath ?? (existsSync(DEFAULT_CONFIG_PATH) ? DEFAULT_CONFIG_PATH : undefined);
   if (candidate == null) return { data: {} };
   const path = resolve(candidate);
@@ -196,13 +197,13 @@ function resolveMaybeRelative(path: string, config?: ConfigBundle): string {
 }
 
 function configString(flags: Flags, config: ConfigBundle, name: string, envName: string, configValue?: string): string | undefined {
-  return flag(flags, name) ?? process.env[envName] ?? configValue;
+  return flag(flags, name) ?? envValue(envName) ?? configValue;
 }
 
 function configNumber(flags: Flags, config: ConfigBundle, name: string, envName: string, configValue?: number): number | undefined {
   const fromFlag = intFlag(flags, name);
   if (fromFlag != null) return fromFlag;
-  const fromEnv = process.env[envName];
+  const fromEnv = envValue(envName);
   if (fromEnv != null && fromEnv.length > 0) {
     const parsed = Number(fromEnv);
     if (!Number.isInteger(parsed)) throw new Error(`${envName} must be an integer`);
@@ -238,30 +239,48 @@ const VAULT_SEARCH_FORMATS = ["text", "json"] as const;
 type CmlRef =
   | { kind: "intent"; id: number; canonical: string; entityTable: "intents" }
   | { kind: "interpretation"; id: number; canonical: string; entityTable: "interpretations" }
-  | { kind: "report"; id: number; canonical: string; entityTable: "reports" };
+  | { kind: "report"; id: number; canonical: string; entityTable: "reports" }
+  | { kind: "action"; id: number; canonical: string; entityTable: "actions" }
+  | { kind: "claim"; id: number; canonical: string; entityTable: "claims" };
+
+/**
+ * Reference prefixes, and why the confusing ones are permanent.
+ *
+ * `CML-` means intent and `INT-` means interpretation. Both read wrongly —
+ * `CML` is the system's own name and `INT` looks like intent — but 335 and 249
+ * rows of the canonical ledger respectively refer to records using them. A
+ * prefix may be added; one may never be reassigned. Pointing `INT-` at intents
+ * would not fail, it would quietly resolve a quarter of the ledger's references
+ * to the wrong record, which is the worst outcome available here.
+ *
+ * The long forms are unambiguous and are what `canonical` emits, so new prose
+ * should prefer INTENT-35 over CML-35.
+ */
+const REF_PREFIXES: ReadonlyArray<{ aliases: readonly string[]; ref: (id: number) => CmlRef }> = [
+  { aliases: ["CML", "INTENT"], ref: (id) => ({ kind: "intent", id, canonical: `INTENT-${id}`, entityTable: "intents" }) },
+  { aliases: ["INT", "INTERPRETATION"], ref: (id) => ({ kind: "interpretation", id, canonical: `INTERPRETATION-${id}`, entityTable: "interpretations" }) },
+  { aliases: ["RPT", "REPORT"], ref: (id) => ({ kind: "report", id, canonical: `REPORT-${id}`, entityTable: "reports" }) },
+  { aliases: ["ACT", "ACTION"], ref: (id) => ({ kind: "action", id, canonical: `ACTION-${id}`, entityTable: "actions" }) },
+  { aliases: ["CLM", "CLAIM"], ref: (id) => ({ kind: "claim", id, canonical: `CLAIM-${id}`, entityTable: "claims" }) },
+];
 
 function parseCmlRef(value: string | undefined): CmlRef {
   if (value == null || value.length === 0) throw new Error("Missing CML reference");
   const match = /^([A-Za-z]+)-?(\d+)$/.exec(value.trim());
   if (!match) {
-    throw new Error("Reference must look like INTENT-35, INTERPRETATION-101, or REPORT-8");
+    throw new Error("Reference must look like INTENT-35, INTERPRETATION-101, REPORT-8, ACTION-12 or CLAIM-4");
   }
 
   const prefix = match[1].toUpperCase();
   const id = Number(match[2]);
   if (!Number.isInteger(id)) throw new Error("Reference id must be an integer");
 
-  if (prefix === "CML" || prefix === "INTENT") {
-    return { kind: "intent", id, canonical: `INTENT-${id}`, entityTable: "intents" };
+  const entry = REF_PREFIXES.find((candidate) => candidate.aliases.includes(prefix));
+  if (!entry) {
+    const known = REF_PREFIXES.flatMap((candidate) => candidate.aliases).join(", ");
+    throw new Error(`Unsupported CML reference prefix: ${match[1]}. Known prefixes: ${known}`);
   }
-  if (prefix === "INT" || prefix === "INTERPRETATION") {
-    return { kind: "interpretation", id, canonical: `INTERPRETATION-${id}`, entityTable: "interpretations" };
-  }
-  if (prefix === "RPT" || prefix === "REPORT") {
-    return { kind: "report", id, canonical: `REPORT-${id}`, entityTable: "reports" };
-  }
-
-  throw new Error(`Unsupported CML reference prefix: ${match[1]}`);
+  return entry.ref(id);
 }
 
 function usage(): ServiceResponse<{ commands: string[] }> {
@@ -287,8 +306,8 @@ function usage(): ServiceResponse<{ commands: string[] }> {
         "cml expertise register|coverage",
         "cml event list|history",
         "cml vault read|search|write|append|move|delete",
-        "cml resolve <INTENT-35|INTERPRETATION-101|REPORT-8>",
-        "cml context <INTENT-35|INTERPRETATION-101>",
+        "cml resolve <INTENT-35|INTERPRETATION-101|REPORT-8|ACTION-12|CLAIM-4>  (CML-/INT-/RPT-/ACT-/CLM- also accepted)",
+        "cml context <INTENT-35|INTERPRETATION-101|REPORT-8|ACTION-12|CLAIM-4>",
         "cml status",
         "  global flags: --actor <name> --origin <direct|proxy> --db <path> --pretty",
       ],
@@ -322,14 +341,36 @@ function vaultService(flags: Flags, config: ConfigBundle): ObsidianVaultService 
 
 async function logVaultMutation(
   ctx: CliContext,
-  params: { intentId: number; operation: string; path?: string; destination?: string; outcome?: string }
+  params: { intentId: number; operation: string; path?: string; destination?: string; result: VaultCommandResult }
 ): Promise<ServiceResponse<unknown>> {
   return ctx.service.logAction({
     intentId: params.intentId,
     callerActorId: ctx.actor.id,
     description: `Vault ${params.operation}: ${params.path ?? "(no path)"}${params.destination ? ` -> ${params.destination}` : ""}`,
-    outcome: params.outcome,
+    outcome: renderVaultManifest(params.result.manifest ?? fallbackVaultManifest(params.operation, params.path, params.result, params.destination)),
   });
+}
+
+function renderVaultManifest(manifest: VaultMutationManifest): string {
+  return JSON.stringify({ manifest }, null, 2);
+}
+
+function fallbackVaultManifest(
+  operation: string,
+  path: string | undefined,
+  result: VaultCommandResult,
+  destination?: string
+): VaultMutationManifest {
+  return {
+    files: [
+      {
+        path: result.path ?? path ?? "(no path)",
+        change: result.data === "created" ? "created" : operation === "delete" ? "deleted" : operation === "move" ? "moved" : "changed",
+        operation,
+        ...(destination ? { destination } : {}),
+      },
+    ],
+  };
 }
 
 async function requireIntentForVaultMutation(ctx: CliContext, intentId: number): Promise<void> {
@@ -373,7 +414,7 @@ function defaultConfig(params: {
 }
 
 async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> {
-  const configPath = config.path ?? resolve(flag(flags, "config") ?? process.env.CML_CONFIG ?? DEFAULT_CONFIG_PATH);
+  const configPath = config.path ?? resolve(flag(flags, "config") ?? envValue("CML_CONFIG") ?? DEFAULT_CONFIG_PATH);
   const scope = configString(flags, config, "scope", "CML_SCOPE", config.data.defaultScope ?? config.data.actor?.defaultScope) ?? DEFAULT_SCOPE;
   const actorName = configString(flags, config, "actor", "CML_ACTOR", config.data.actor?.name) ?? DEFAULT_ACTOR;
   const provider = configString(flags, config, "provider", "CML_PROVIDER", config.data.actor?.provider) ?? DEFAULT_PROVIDER;
@@ -732,7 +773,19 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         ? { ok: true, data: { ref, entity: result.data }, meta: result.meta }
         : result;
     }
-    const result = await ctx.service.getReport(ref.id);
+    if (ref.kind === "report") {
+      const result = await ctx.service.getReport(ref.id);
+      return result.ok
+        ? { ok: true, data: { ref, entity: result.data }, meta: result.meta }
+        : result;
+    }
+    if (ref.kind === "action") {
+      const result = await ctx.service.getAction(ref.id);
+      return result.ok
+        ? { ok: true, data: { ref, entity: result.data }, meta: result.meta }
+        : result;
+    }
+    const result = await ctx.service.getClaim(ref.id);
     return result.ok
       ? { ok: true, data: { ref, entity: result.data }, meta: result.meta }
       : result;
@@ -751,6 +804,28 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
       return result.ok
         ? { ok: true, data: { ref, context: result.data }, meta: { schema_version: 2 } }
         : commandError(result.error, "NOT_FOUND");
+    }
+    if (ref.kind === "action") {
+      // An action always carries a mandating intent, so its context is that intent's.
+      const action = await ctx.service.getAction(ref.id);
+      if (!action.ok) return action;
+      const related = await inspectIntent(action.data.intentId as number, ctx.service);
+      return {
+        ok: true,
+        data: { ref, action: action.data, context: related.ok ? related.data : undefined },
+        meta: { schema_version: 2 },
+      };
+    }
+    if (ref.kind === "claim") {
+      // A claim points at an arbitrary entity rather than an intent, so its context
+      // is what it holds, not a lineage.
+      const claim = await ctx.service.getClaim(ref.id);
+      if (!claim.ok) return claim;
+      return {
+        ok: true,
+        data: { ref, claim: claim.data, holds: { entityTable: claim.data.entityTable, entityId: claim.data.entityId } },
+        meta: { schema_version: 2 },
+      };
     }
     const report = await ctx.service.getReport(ref.id);
     if (!report.ok) return report;
@@ -1193,12 +1268,23 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         meta: { schema_version: 2 },
       };
     }
+    if (op === "find" || op === "resolve") {
+      return {
+        ok: true,
+        data: await vault.find(requiredFlag(flags, "query"), {
+          path: flag(flags, "path"),
+          limit: intFlag(flags, "limit"),
+          format: enumFlag(flags, "format", VAULT_SEARCH_FORMATS),
+        }),
+        meta: { schema_version: 2 },
+      };
+    }
     if (op === "write") {
       const intentId = requiredIntFlag(flags, "intent");
       const path = requiredFlag(flags, "path");
       await requireIntentForVaultMutation(ctx, intentId);
       const result = await vault.write(path, requiredFlag(flags, "content"));
-      const action = await logVaultMutation(ctx, { intentId, operation: "write", path: result.path, outcome: result.data });
+      const action = await logVaultMutation(ctx, { intentId, operation: "write", path: result.path, result });
       return { ok: true, data: { vault: result, action: action.ok ? action.data : action }, meta: { schema_version: 2 } };
     }
     if (op === "append") {
@@ -1206,7 +1292,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
       const path = requiredFlag(flags, "path");
       await requireIntentForVaultMutation(ctx, intentId);
       const result = await vault.append(path, requiredFlag(flags, "content"));
-      const action = await logVaultMutation(ctx, { intentId, operation: "append", path: result.path, outcome: result.data });
+      const action = await logVaultMutation(ctx, { intentId, operation: "append", path: result.path, result });
       return { ok: true, data: { vault: result, action: action.ok ? action.data : action }, meta: { schema_version: 2 } };
     }
     if (op === "move") {
@@ -1220,7 +1306,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         operation: "move",
         path,
         destination: result.path,
-        outcome: result.data,
+        result,
       });
       return { ok: true, data: { vault: result, action: action.ok ? action.data : action }, meta: { schema_version: 2 } };
     }
@@ -1230,7 +1316,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
       const path = requiredFlag(flags, "path");
       await requireIntentForVaultMutation(ctx, intentId);
       const result = await vault.delete(path);
-      const action = await logVaultMutation(ctx, { intentId, operation: "delete", path: result.path, outcome: result.data });
+      const action = await logVaultMutation(ctx, { intentId, operation: "delete", path: result.path, result });
       return { ok: true, data: { vault: result, action: action.ok ? action.data : action }, meta: { schema_version: 2 } };
     }
   }
@@ -1282,12 +1368,12 @@ async function main(): Promise<void> {
 
     const flagActorId = intFlag(flags, "actor-id");
     const flagActorName = flag(flags, "actor");
-    const envActorId = process.env.CML_ACTOR_ID ? Number(process.env.CML_ACTOR_ID) : undefined;
+    const envActorId = envValue("CML_ACTOR_ID") ? Number(envValue("CML_ACTOR_ID")) : undefined;
     const configActorId = config.data.actor?.id;
     const actorIdValue = flagActorId ?? (flagActorName ? undefined : envActorId ?? configActorId);
     const actorNameValue = flagActorId != null
       ? undefined
-      : flagActorName ?? (envActorId != null ? undefined : process.env.CML_ACTOR ?? (configActorId != null ? undefined : config.data.actor?.name));
+      : flagActorName ?? (envActorId != null ? undefined : envValue("CML_ACTOR") ?? (configActorId != null ? undefined : config.data.actor?.name));
 
     if (!Number.isInteger(actorIdValue) && !actorNameValue) {
       printJson(commandError("Set CML_ACTOR_ID/CML_ACTOR, pass --actor-id/--actor, or run `cml init`.", "ACTOR_REQUIRED"), pretty);

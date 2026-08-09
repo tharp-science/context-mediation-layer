@@ -77,6 +77,13 @@ export type ServiceResponse<T> = ServiceResult<T> | ServiceError;
 
 const SCHEMA_VERSION = 2;
 
+// registerActor, updateActor, registerRole, registerDomain and registerScope have no
+// caller identity flowing into them at all — Task 5 adds callerActorId to their service
+// params in the same change that makes these repository methods start emitting events.
+// Until then this placeholder satisfies the repository's required parameter; nothing
+// reads it, because none of these five methods emit an event yet.
+const UNATTRIBUTED_CALLER = toActorId(0);
+
 function success<T>(data: T, extra?: { count?: number; has_more?: boolean }): ServiceResult<T> {
   return { ok: true, data, meta: { schema_version: SCHEMA_VERSION, ...extra } };
 }
@@ -179,8 +186,10 @@ export class GovernanceService {
         parentId: params.parentId != null ? intendId(params.parentId) : undefined,
         status: params.status,
       },
-      // Actor attribution is the writer of the governance event, not the optional addressed recipient.
-      params.actorId != null ? toActorId(params.actorId) : undefined
+      // Actor attribution is the writer of the governance event, not the optional addressed
+      // recipient. params.actorId stays optional here — Task 5/6 formalize callerActorId
+      // across the service — but every current call site (CLI, UI, SDK) already supplies it.
+      toActorId(params.actorId as number)
     );
     return success(intent);
   }
@@ -210,7 +219,9 @@ export class GovernanceService {
       intendId(params.id),
       updates,
       params.reason,
-      params.actorId != null ? toActorId(params.actorId) : undefined
+      // params.actorId stays optional here — Task 5/6 formalize callerActorId across the
+      // service — but every current call site (CLI, UI, SDK) already supplies it.
+      toActorId(params.actorId as number)
     );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
@@ -279,7 +290,7 @@ export class GovernanceService {
       sourceRef: params.sourceRef,
       resolverId: params.resolverId != null ? toActorId(params.resolverId) : undefined,
       resolveBy: params.resolveBy ? new Date(params.resolveBy) : undefined,
-    });
+    }, toActorId(params.actorId));
     return success(interp);
   }
 
@@ -312,7 +323,9 @@ export class GovernanceService {
       toInterpretationId(params.id),
       updates,
       params.reason,
-      params.actorId != null ? toActorId(params.actorId) : undefined
+      // params.actorId stays optional here — Task 5/6 formalize callerActorId across the
+      // service — but every current call site (UI, SDK) already supplies it.
+      toActorId(params.actorId as number)
     );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
@@ -325,12 +338,21 @@ export class GovernanceService {
     newScopeAssumption?: string;
     newStatus?: InterpretationStatus;
   }): Promise<ServiceResponse<{ old: Interpretation; replacement: Interpretation }>> {
+    // No caller identity reaches this method until Task 5 adds callerActorId to its
+    // params (it is one of the eight repository writes that had none before this task).
+    // Attribute the event to the interpretation's current author — the only actor in
+    // scope here — so behaviour through the service is unchanged by this task; the
+    // repository-level fix is what lets Task 5 name a real caller once it lands.
+    const current = await this.repo.getInterpretation(toInterpretationId(params.id));
+    if (!current) return fail("NOT_FOUND", `Interpretation ${params.id} not found`);
+
     const result = await this.repo.supersedeInterpretation(
       toInterpretationId(params.id),
       params.newTitle,
       params.reason,
       params.newScopeAssumption,
-      params.newStatus
+      params.newStatus,
+      current.actorId
     );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
@@ -400,7 +422,7 @@ export class GovernanceService {
       policyRef: params.policyRef,
       interpretationId: params.interpretationId != null ? toInterpretationId(params.interpretationId) : undefined,
       outcome: params.outcome,
-    });
+    }, toActorId(params.actorId));
     return success(action);
   }
 
@@ -441,7 +463,10 @@ export class GovernanceService {
       params.entityTable,
       params.entityId,
       toActorId(params.actorId),
-      params.note
+      params.note,
+      // Single actor param today: the claimant is also the caller until Task 6 splits
+      // subjectActorId from callerActorId.
+      toActorId(params.actorId)
     );
     return success(claim);
   }
@@ -450,7 +475,14 @@ export class GovernanceService {
     id: number;
     reason?: string;
   }): Promise<ServiceResponse<{ released: true }>> {
-    const result = await this.repo.releaseClaim(params.id as ClaimId, params.reason);
+    // No caller identity reaches this method until Task 5 adds callerActorId to its
+    // params (it is one of the eight repository writes that had none before this task).
+    // Attribute the event to the claim's current holder — the only actor in scope here —
+    // so behaviour through the service is unchanged by this task.
+    const claim = await this.repo.getClaim(params.id as ClaimId);
+    if (!claim) return fail("NOT_FOUND", `Claim ${params.id} not found`);
+
+    const result = await this.repo.releaseClaim(params.id as ClaimId, params.reason, claim.actorId);
     if (isError(result)) return fail(result.code, result.message);
     return success({ released: true });
   }
@@ -493,7 +525,7 @@ export class GovernanceService {
       actorId: toActorId(params.actorId),
       signal: params.signal,
       note: params.note,
-    });
+    }, toActorId(params.actorId));
     return success(record);
   }
 
@@ -596,7 +628,9 @@ export class GovernanceService {
       governingContractKey: params.governingContractKey,
       mandateRef: params.mandateRef,
       contentHash: hashContractBody(params.body),
-    });
+    // custodianActorId is a recorded role, not a caller — but it is the only actor in
+    // scope here until Task 6 adds a distinct callerActorId param to this method.
+    }, custodian.id);
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
   }
@@ -674,7 +708,10 @@ export class GovernanceService {
         mandateRef: params.mandateRef,
         contentHash: hashContractBody(params.body),
       },
-      params.reason
+      params.reason,
+      // custodianActorId is a recorded role, not a caller — but it is the only actor in
+      // scope here until Task 6 adds a distinct callerActorId param to this method.
+      custodian.id
     );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
@@ -752,7 +789,9 @@ export class GovernanceService {
       contextRef: params.contextRef,
       contextPolicy: params.contextPolicy,
       description: params.description,
-    });
+    // No caller identity reaches this method until Task 5 adds callerActorId — see
+    // UNATTRIBUTED_CALLER above.
+    }, UNATTRIBUTED_CALLER);
     return success(actor);
   }
 
@@ -798,7 +837,9 @@ export class GovernanceService {
     if (params.contextPolicy !== undefined) updates.contextPolicy = params.contextPolicy;
     if (params.description !== undefined) updates.description = params.description;
 
-    const result = await this.repo.updateActor(toActorId(params.id), updates);
+    // No caller identity reaches this method until Task 5 adds callerActorId — see
+    // UNATTRIBUTED_CALLER above.
+    const result = await this.repo.updateActor(toActorId(params.id), updates, UNATTRIBUTED_CALLER);
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
   }
@@ -812,9 +853,11 @@ export class GovernanceService {
   }
 
   async retireActor(params: { id: number; reason?: string }): Promise<ServiceResponse<Actor>> {
+    // No caller identity reaches this method until Task 5 adds callerActorId — see
+    // UNATTRIBUTED_CALLER above.
     const result = await this.repo.updateActor(toActorId(params.id), {
       status: "retired",
-    });
+    }, UNATTRIBUTED_CALLER);
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
   }
@@ -841,7 +884,9 @@ export class GovernanceService {
       const contractError = await this.requireActiveContractKey(params.contractKey);
       if (contractError) return contractError;
     }
-    const role = await this.repo.registerRole(params);
+    // No caller identity reaches this method until Task 5 adds callerActorId — see
+    // UNATTRIBUTED_CALLER above.
+    const role = await this.repo.registerRole(params, UNATTRIBUTED_CALLER);
     return success(role);
   }
 
@@ -877,7 +922,9 @@ export class GovernanceService {
       provider: params.provider,
       credentialRef: params.credentialRef,
       status: params.status,
-    });
+    // actor.id is the subject (the actor being bound), also passed as caller until
+    // Task 6 splits subjectActorId from callerActorId.
+    }, actor.id);
     return success(binding);
   }
 
@@ -916,7 +963,9 @@ export class GovernanceService {
       surface: params.surface,
       provider: params.provider ?? actor.provider,
       transcriptRef: params.transcriptRef,
-    });
+    // actor.id is the subject (the session owner), also passed as caller until Task 6
+    // splits subjectActorId from callerActorId.
+    }, actor.id);
     return success(session);
   }
 
@@ -924,7 +973,13 @@ export class GovernanceService {
     actorId: number;
     sessionRef: string;
   }): Promise<ServiceResponse<ActorSession>> {
-    const result = await this.repo.heartbeatActorSession(params.sessionRef, toActorId(params.actorId));
+    // The session owner is also the caller until Task 6 splits subjectActorId from
+    // callerActorId.
+    const result = await this.repo.heartbeatActorSession(
+      params.sessionRef,
+      toActorId(params.actorId),
+      toActorId(params.actorId)
+    );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
   }
@@ -933,7 +988,13 @@ export class GovernanceService {
     actorId: number;
     sessionRef: string;
   }): Promise<ServiceResponse<ActorSession>> {
-    const result = await this.repo.closeActorSession(params.sessionRef, toActorId(params.actorId));
+    // The session owner is also the caller until Task 6 splits subjectActorId from
+    // callerActorId.
+    const result = await this.repo.closeActorSession(
+      params.sessionRef,
+      toActorId(params.actorId),
+      toActorId(params.actorId)
+    );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
   }
@@ -971,12 +1032,14 @@ export class GovernanceService {
     concern: string;
     notionPageId?: string;
   }): Promise<ServiceResponse<Domain>> {
+    // No caller identity reaches this method until Task 5 adds callerActorId — see
+    // UNATTRIBUTED_CALLER above.
     const domain = await this.repo.registerDomain({
       scope: params.scope ?? "default",
       name: params.name,
       concern: params.concern,
       notionPageId: params.notionPageId,
-    });
+    }, UNATTRIBUTED_CALLER);
     return success(domain);
   }
 
@@ -990,7 +1053,9 @@ export class GovernanceService {
   // ----------------------------------------------------------
 
   async registerScope(params: { scope: string }): Promise<ServiceResponse<{ scope: string }>> {
-    const scope = await this.repo.registerScope(params.scope);
+    // No caller identity reaches this method until Task 5 adds callerActorId — see
+    // UNATTRIBUTED_CALLER above.
+    const scope = await this.repo.registerScope(params.scope, UNATTRIBUTED_CALLER);
     return success({ scope });
   }
 
@@ -1033,7 +1098,7 @@ export class GovernanceService {
       domainId: params.domainId != null ? toDomainId(params.domainId) : undefined,
       intentId: params.intentId != null ? intendId(params.intentId) : undefined,
       sourceRef: params.sourceRef,
-    });
+    }, actor.id);
     return success(report);
   }
 

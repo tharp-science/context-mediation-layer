@@ -104,14 +104,14 @@ export interface GovernanceRepository {
   // Intents
   createIntent(
     intent: Omit<Intent, "id" | "version" | "createdAt" | "updatedAt" | "status"> & { status?: IntentStatus },
-    actorId?: ActorId
+    callerActorId: ActorId
   ): Promise<Intent>;
   getIntent(id: IntentId): Promise<IntentEnriched | null>;
   updateIntent(
     id: IntentId,
     updates: Partial<Omit<Intent, "id" | "createdAt">>,
     reason: string,
-    actorId?: ActorId
+    callerActorId: ActorId
   ): Promise<Intent | RepositoryError>;
   listIntents(filters?: { scope?: string; status?: IntentStatus; parentId?: IntentId | null }): Promise<Intent[]>;
 
@@ -120,21 +120,23 @@ export interface GovernanceRepository {
     interpretation: Omit<Interpretation, "id" | "createdAt" | "updatedAt" | "status" | "alignment"> & {
       status?: InterpretationStatus;
       alignment?: InterpretationAlignment;
-    }
+    },
+    callerActorId: ActorId
   ): Promise<Interpretation>;
   getInterpretation(id: InterpretationId): Promise<InterpretationEnriched | null>;
   updateInterpretation(
     id: InterpretationId,
     updates: Partial<Omit<Interpretation, "id" | "createdAt" | "title">>,
     reason: string,
-    actorId?: ActorId
+    callerActorId: ActorId
   ): Promise<Interpretation | RepositoryError>;
   supersedeInterpretation(
     id: InterpretationId,
     newTitle: string,
     reason: string,
-    newScopeAssumption?: string,
-    newStatus?: InterpretationStatus
+    newScopeAssumption: string | undefined,
+    newStatus: InterpretationStatus | undefined,
+    callerActorId: ActorId
   ): Promise<{ old: Interpretation; replacement: Interpretation } | RepositoryError>;
   listInterpretations(filters?: {
     intentId?: IntentId;
@@ -144,7 +146,7 @@ export interface GovernanceRepository {
   }): Promise<Interpretation[]>;
 
   // Actions
-  logAction(action: Omit<Action, "id" | "createdAt">): Promise<Action>;
+  logAction(action: Omit<Action, "id" | "createdAt">, callerActorId: ActorId): Promise<Action>;
   getAction(id: ActionId): Promise<Action | null>;
   listActions(filters?: {
     intentId?: IntentId;
@@ -154,18 +156,24 @@ export interface GovernanceRepository {
   }): Promise<Action[]>;
 
   // Claims
-  acquireClaim(entityTable: string, entityId: number, actor: ActorId, note?: string): Promise<Claim>;
-  releaseClaim(id: ClaimId, reason?: string): Promise<void | RepositoryError>;
+  acquireClaim(
+    entityTable: string,
+    entityId: number,
+    actor: ActorId,
+    note: string | undefined,
+    callerActorId: ActorId
+  ): Promise<Claim>;
+  releaseClaim(id: ClaimId, reason: string | undefined, callerActorId: ActorId): Promise<void | RepositoryError>;
   getClaim(id: ClaimId): Promise<Claim | null>;
   listClaims(filters?: { entityTable?: string; entityId?: number; status?: ClaimStatus }): Promise<Claim[]>;
 
   // Domains
-  registerDomain(domain: Omit<Domain, "id">): Promise<Domain>;
+  registerDomain(domain: Omit<Domain, "id">, callerActorId: ActorId): Promise<Domain>;
   getDomain(id: DomainId): Promise<Domain | null>;
   listDomains(): Promise<Domain[]>;
 
   // Contracts (canonical contract matter; no projection writes)
-  registerContract(contract: ContractCreate): Promise<Contract | RepositoryError>;
+  registerContract(contract: ContractCreate, callerActorId: ActorId): Promise<Contract | RepositoryError>;
   getContract(id: ContractId): Promise<Contract | null>;
   getContractByKey(key: string, status?: ContractStatus): Promise<Contract | null>;
   listContracts(filters?: {
@@ -180,22 +188,27 @@ export interface GovernanceRepository {
   supersedeContract(
     id: ContractId,
     replacement: ContractSupersedeInput,
-    reason: string
+    reason: string,
+    callerActorId: ActorId
   ): Promise<{ old: Contract; replacement: Contract } | RepositoryError>;
 
   // Actors
-  registerActor(actor: ActorCreate): Promise<Actor>;
-  updateActor(id: ActorId, updates: Partial<Omit<Actor, "id" | "createdAt">>): Promise<Actor | RepositoryError>;
+  registerActor(actor: ActorCreate, callerActorId: ActorId): Promise<Actor>;
+  updateActor(
+    id: ActorId,
+    updates: Partial<Omit<Actor, "id" | "createdAt">>,
+    callerActorId: ActorId
+  ): Promise<Actor | RepositoryError>;
   getActor(id: ActorId): Promise<Actor | null>;
   getActorByName(name: string): Promise<Actor | null>;
   listActors(filters?: { status?: ActorStatus; provider?: string }): Promise<Actor[]>;
 
   // Roles and actor-role bindings (who may assume which trust envelope through which surface)
-  registerRole(role: GovernanceRoleCreate): Promise<GovernanceRole>;
+  registerRole(role: GovernanceRoleCreate, callerActorId: ActorId): Promise<GovernanceRole>;
   getRole(id: import("./domain.js").RoleId): Promise<GovernanceRole | null>;
   getRoleByName(name: string): Promise<GovernanceRole | null>;
   listRoles(filters?: { status?: GovernanceRoleStatus }): Promise<GovernanceRole[]>;
-  bindActorRole(binding: ActorRoleBindingCreate): Promise<ActorRoleBinding>;
+  bindActorRole(binding: ActorRoleBindingCreate, callerActorId: ActorId): Promise<ActorRoleBinding>;
   listActorRoleBindings(filters?: {
     actorId?: ActorId;
     roleId?: import("./domain.js").RoleId;
@@ -204,21 +217,32 @@ export interface GovernanceRepository {
   }): Promise<ActorRoleBinding[]>;
 
   // Actor Sessions (ephemeral liveness, never accountability)
-  openActorSession(session: ActorSessionCreate): Promise<ActorSession>;
-  heartbeatActorSession(sessionRef: string, actorId: ActorId): Promise<ActorSession | RepositoryError>;
-  closeActorSession(sessionRef: string, actorId: ActorId): Promise<ActorSession | RepositoryError>;
+  openActorSession(session: ActorSessionCreate, callerActorId: ActorId): Promise<ActorSession>;
+  heartbeatActorSession(
+    sessionRef: string,
+    actorId: ActorId,
+    callerActorId: ActorId
+  ): Promise<ActorSession | RepositoryError>;
+  closeActorSession(
+    sessionRef: string,
+    actorId: ActorId,
+    callerActorId: ActorId
+  ): Promise<ActorSession | RepositoryError>;
   listActorSessions(filters?: { actorId?: ActorId; status?: ActorSessionStatus }): Promise<ActorSession[]>;
 
   // Scopes
-  registerScope(scope: string): Promise<string>;
+  registerScope(scope: string, callerActorId: ActorId): Promise<string>;
   listScopes(): Promise<string[]>;
 
   // Expertise Signals
-  registerExpertiseSignal(signal: Omit<ExpertiseSignalRecord, "id" | "createdAt">): Promise<ExpertiseSignalRecord>;
+  registerExpertiseSignal(
+    signal: Omit<ExpertiseSignalRecord, "id" | "createdAt">,
+    callerActorId: ActorId
+  ): Promise<ExpertiseSignalRecord>;
   listExpertiseSignals(intentId: IntentId): Promise<ExpertiseSignalRecord[]>;
 
   // Reports
-  registerReport(report: ReportCreate): Promise<Report>;
+  registerReport(report: ReportCreate, callerActorId: ActorId): Promise<Report>;
   getReport(id: ReportId): Promise<Report | null>;
   listReports(filters?: {
     scope?: string;
@@ -278,7 +302,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
 
   async createIntent(
     intent: Omit<Intent, "id" | "version" | "createdAt" | "updatedAt" | "status"> & { status?: IntentStatus },
-    actorId?: ActorId
+    callerActorId: ActorId
   ): Promise<Intent> {
     const now = new Date();
     const id = intendId(this.nextIntentId++);
@@ -291,9 +315,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       updatedAt: now,
     };
     this.intents.set(id, record);
-    if (actorId != null) {
-      await this.emitEvent("intent_created", "intents", id, actorId);
-    }
+    await this.emitEvent("intent_created", "intents", id, callerActorId);
     return record;
   }
 
@@ -315,7 +337,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     id: IntentId,
     updates: Partial<Omit<Intent, "id" | "createdAt">>,
     reason: string,
-    actorId?: ActorId
+    callerActorId: ActorId
   ): Promise<Intent | RepositoryError> {
     const intent = this.intents.get(id);
     if (!intent) return { code: "NOT_FOUND", message: `Intent ${id} not found` };
@@ -329,9 +351,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     };
 
     this.intents.set(id, updated);
-    if (actorId != null) {
-      await this.emitEvent("intent_updated", "intents", id, actorId, { reason });
-    }
+    await this.emitEvent("intent_updated", "intents", id, callerActorId, { reason });
     return updated;
   }
 
@@ -358,7 +378,8 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     interpretation: Omit<Interpretation, "id" | "createdAt" | "updatedAt" | "status" | "alignment"> & {
       status?: InterpretationStatus;
       alignment?: InterpretationAlignment;
-    }
+    },
+    callerActorId: ActorId
   ): Promise<Interpretation> {
     const now = new Date();
     const id = interpretationId(this.nextInterpretationId++);
@@ -371,7 +392,8 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       updatedAt: now,
     };
     this.interpretations.set(id, record);
-    await this.emitEvent("interpretation_filed", "interpretations", id, interpretation.actorId);
+    // Bug fix: this used to name interpretation.actorId (the author) instead of the caller.
+    await this.emitEvent("interpretation_filed", "interpretations", id, callerActorId);
     return record;
   }
 
@@ -392,7 +414,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     id: InterpretationId,
     updates: Partial<Omit<Interpretation, "id" | "createdAt" | "title">>,
     reason: string,
-    actorId?: ActorId
+    callerActorId: ActorId
   ): Promise<Interpretation | RepositoryError> {
     const interp = this.interpretations.get(id);
     if (!interp) return { code: "NOT_FOUND", message: `Interpretation ${id} not found` };
@@ -407,9 +429,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     };
 
     this.interpretations.set(id, updated);
-    if (actorId != null) {
-      await this.emitEvent("interpretation_updated", "interpretations", id, actorId, { reason });
-    }
+    await this.emitEvent("interpretation_updated", "interpretations", id, callerActorId, { reason });
     return updated;
   }
 
@@ -417,13 +437,15 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     id: InterpretationId,
     newTitle: string,
     reason: string,
-    newScopeAssumption?: string,
-    newStatus?: InterpretationStatus
+    newScopeAssumption: string | undefined,
+    newStatus: InterpretationStatus | undefined,
+    callerActorId: ActorId
   ): Promise<{ old: Interpretation; replacement: Interpretation } | RepositoryError> {
     const interp = this.interpretations.get(id);
     if (!interp) return { code: "NOT_FOUND", message: `Interpretation ${id} not found` };
 
-    // Create replacement with same actor/domain/intent, reset alignment
+    // Create replacement with same actor/domain/intent, reset alignment. The replacement's
+    // authorship fields are inherited from the original — only the event actor changes.
     const replacementId = interpretationId(this.nextInterpretationId++);
     const now = new Date();
     const replacement: Interpretation = {
@@ -450,8 +472,10 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     };
     this.interpretations.set(id, old);
 
-    await this.emitEvent("interpretation_superseded", "interpretations", id, interp.actorId, { reason });
-    await this.emitEvent("interpretation_filed", "interpretations", replacementId, interp.actorId);
+    // Bug fix: these two events used to name interp.actorId (the original author) instead
+    // of callerActorId (whoever performed the supersession).
+    await this.emitEvent("interpretation_superseded", "interpretations", id, callerActorId, { reason });
+    await this.emitEvent("interpretation_filed", "interpretations", replacementId, callerActorId);
 
     return { old, replacement };
   }
@@ -474,7 +498,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   // Actions
   // ============================================================
 
-  async logAction(action: Omit<Action, "id" | "createdAt">): Promise<Action> {
+  async logAction(action: Omit<Action, "id" | "createdAt">, callerActorId: ActorId): Promise<Action> {
     const id = actionId(this.nextActionId++);
     const record: Action = {
       ...action,
@@ -482,7 +506,8 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       createdAt: new Date(),
     };
     this.actions.set(id, record);
-    await this.emitEvent("action_logged", "actions", id, action.actorId);
+    // Bug fix: this used to name action.actorId instead of the caller.
+    await this.emitEvent("action_logged", "actions", id, callerActorId);
     return record;
   }
 
@@ -514,7 +539,8 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     entityTable: string,
     entityId: number,
     actor: ActorId,
-    note?: string
+    note: string | undefined,
+    callerActorId: ActorId
   ): Promise<Claim> {
     // Claims are advisory signals, not exclusive locks.
     // Multiple actors can claim the same entity; claims are advisory, not locks.
@@ -529,11 +555,11 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       createdAt: new Date(),
     };
     this.claims.set(id, record);
-    await this.emitEvent("claim_acquired", entityTable, entityId, actor, { reason: note });
+    await this.emitEvent("claim_acquired", entityTable, entityId, callerActorId, { reason: note });
     return record;
   }
 
-  async releaseClaim(id: ClaimId, reason?: string): Promise<void | RepositoryError> {
+  async releaseClaim(id: ClaimId, reason: string | undefined, callerActorId: ActorId): Promise<void | RepositoryError> {
     const claim = this.claims.get(id);
     if (!claim) return { code: "NOT_FOUND", message: `Claim ${id} not found` };
 
@@ -547,7 +573,8 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       releasedAt: new Date(),
     };
     this.claims.set(id, released);
-    await this.emitEvent("claim_released", claim.entityTable, claim.entityId, claim.actorId, {
+    // Bug fix: this used to name claim.actorId (the holder) instead of whoever released it.
+    await this.emitEvent("claim_released", claim.entityTable, claim.entityId, callerActorId, {
       reason,
     });
   }
@@ -568,7 +595,9 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   // Domains
   // ============================================================
 
-  async registerDomain(domain: Omit<Domain, "id">): Promise<Domain> {
+  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
+  // adds both callerActorId to the service call site and the emitEvent call here.
+  async registerDomain(domain: Omit<Domain, "id">, callerActorId: ActorId): Promise<Domain> {
     const id = domainId(this.nextDomainId++);
     const record: Domain = { ...domain, id };
     this.domains.set(id, record);
@@ -587,7 +616,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   // Contracts
   // ============================================================
 
-  async registerContract(contract: ContractCreate): Promise<Contract | RepositoryError> {
+  async registerContract(contract: ContractCreate, callerActorId: ActorId): Promise<Contract | RepositoryError> {
     const existingOpen = Array.from(this.contracts.values()).find((candidate) =>
       candidate.key === contract.key && (candidate.status === "active" || candidate.status === "draft")
     );
@@ -609,7 +638,9 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       updatedAt: now,
     };
     this.contracts.set(id, record);
-    await this.emitEvent("contract_registered", "contracts", id, record.custodianActorId, {
+    // Bug fix: this used to name record.custodianActorId (the custodian role) instead of
+    // the caller. The custodian remains recorded on the contract itself, unchanged.
+    await this.emitEvent("contract_registered", "contracts", id, callerActorId, {
       scope: record.scope,
       snapshot: { ...record, body: undefined, bodyLength: record.body.length } as Record<string, unknown>,
     });
@@ -652,7 +683,8 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   async supersedeContract(
     id: ContractId,
     replacement: ContractSupersedeInput,
-    reason: string
+    reason: string,
+    callerActorId: ActorId
   ): Promise<{ old: Contract; replacement: Contract } | RepositoryError> {
     const current = this.contracts.get(id);
     if (!current) return { code: "NOT_FOUND", message: `Contract ${id} not found` };
@@ -704,12 +736,14 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     };
     this.contracts.set(id, old);
     this.contracts.set(replacementId, replacementRecord);
-    await this.emitEvent("contract_superseded", "contracts", id, replacement.custodianActorId, {
+    // Bug fix: these two events used to name replacement.custodianActorId (the custodian
+    // role) instead of the caller. The custodian remains recorded on the contract, unchanged.
+    await this.emitEvent("contract_superseded", "contracts", id, callerActorId, {
       scope: current.scope,
       reason,
       snapshot: { ...old, body: undefined, bodyLength: old.body.length } as Record<string, unknown>,
     });
-    await this.emitEvent("contract_registered", "contracts", replacementId, replacement.custodianActorId, {
+    await this.emitEvent("contract_registered", "contracts", replacementId, callerActorId, {
       scope: replacementRecord.scope,
       snapshot: { ...replacementRecord, body: undefined, bodyLength: replacementRecord.body.length } as Record<string, unknown>,
     });
@@ -720,7 +754,9 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   // Actors
   // ============================================================
 
-  async registerActor(actor: ActorCreate): Promise<Actor> {
+  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
+  // adds both callerActorId to the service call site and the emitEvent call here.
+  async registerActor(actor: ActorCreate, callerActorId: ActorId): Promise<Actor> {
     const now = new Date();
     const id = actorId(this.nextActorId++);
     const record: Actor = {
@@ -734,7 +770,13 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     return record;
   }
 
-  async updateActor(id: ActorId, updates: Partial<Omit<Actor, "id" | "createdAt">>): Promise<Actor | RepositoryError> {
+  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
+  // adds both callerActorId to the service call site and the emitEvent call here.
+  async updateActor(
+    id: ActorId,
+    updates: Partial<Omit<Actor, "id" | "createdAt">>,
+    callerActorId: ActorId
+  ): Promise<Actor | RepositoryError> {
     const actor = this.actors.get(id);
     if (!actor) return { code: "NOT_FOUND", message: `Actor ${id} not found` };
     const updated: Actor = { ...actor, ...updates, id, updatedAt: new Date() };
@@ -757,7 +799,9 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     return result;
   }
 
-  async registerRole(role: GovernanceRoleCreate): Promise<GovernanceRole> {
+  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
+  // adds both callerActorId to the service call site and the emitEvent call here.
+  async registerRole(role: GovernanceRoleCreate, callerActorId: ActorId): Promise<GovernanceRole> {
     const now = new Date();
     const id = roleId(this.nextRoleId++);
     const record: GovernanceRole = {
@@ -785,7 +829,8 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     return result;
   }
 
-  async bindActorRole(binding: ActorRoleBindingCreate): Promise<ActorRoleBinding> {
+  // callerActorId: reserved, currently unused — this method emits no event yet.
+  async bindActorRole(binding: ActorRoleBindingCreate, callerActorId: ActorId): Promise<ActorRoleBinding> {
     const now = new Date();
     const existing = Array.from(this.actorRoleBindings.values()).find((candidate) =>
       candidate.actorId === binding.actorId &&
@@ -824,7 +869,8 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     return result;
   }
 
-  async openActorSession(session: ActorSessionCreate): Promise<ActorSession> {
+  // callerActorId: reserved, currently unused — this method emits no event yet.
+  async openActorSession(session: ActorSessionCreate, callerActorId: ActorId): Promise<ActorSession> {
     const now = new Date();
     const existing = Array.from(this.actorSessions.values())
       .find((s) => s.actorId === session.actorId && s.sessionRef === session.sessionRef && s.status === "active");
@@ -845,7 +891,12 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     return record;
   }
 
-  async heartbeatActorSession(sessionRef: string, actor: ActorId): Promise<ActorSession | RepositoryError> {
+  // callerActorId: reserved, currently unused — this method emits no event yet.
+  async heartbeatActorSession(
+    sessionRef: string,
+    actor: ActorId,
+    callerActorId: ActorId
+  ): Promise<ActorSession | RepositoryError> {
     const session = Array.from(this.actorSessions.values())
       .find((s) => s.actorId === actor && s.sessionRef === sessionRef && s.status === "active");
     if (!session) return { code: "NOT_FOUND", message: `Active session '${sessionRef}' not found for actor ${actor}` };
@@ -854,7 +905,12 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     return updated;
   }
 
-  async closeActorSession(sessionRef: string, actor: ActorId): Promise<ActorSession | RepositoryError> {
+  // callerActorId: reserved, currently unused — this method emits no event yet.
+  async closeActorSession(
+    sessionRef: string,
+    actor: ActorId,
+    callerActorId: ActorId
+  ): Promise<ActorSession | RepositoryError> {
     const session = Array.from(this.actorSessions.values())
       .find((s) => s.actorId === actor && s.sessionRef === sessionRef && s.status === "active");
     if (!session) return { code: "NOT_FOUND", message: `Active session '${sessionRef}' not found for actor ${actor}` };
@@ -877,7 +933,9 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
 
   private scopes = new Set<string>();
 
-  async registerScope(scope: string): Promise<string> {
+  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
+  // adds both callerActorId to the service call site and the emitEvent call here.
+  async registerScope(scope: string, callerActorId: ActorId): Promise<string> {
     this.scopes.add(scope);
     return scope;
   }
@@ -890,7 +948,10 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   // Expertise Signals
   // ============================================================
 
-  async registerExpertiseSignal(signal: Omit<ExpertiseSignalRecord, "id" | "createdAt">): Promise<ExpertiseSignalRecord> {
+  async registerExpertiseSignal(
+    signal: Omit<ExpertiseSignalRecord, "id" | "createdAt">,
+    callerActorId: ActorId
+  ): Promise<ExpertiseSignalRecord> {
     const id = expertiseSignalId(this.nextExpertiseSignalId++);
     const record: ExpertiseSignalRecord = {
       ...signal,
@@ -898,7 +959,8 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       createdAt: new Date(),
     };
     this.expertiseSignals.set(id, record);
-    await this.emitEvent("expertise_signal_registered", "expertise_signals", id, signal.actorId);
+    // Bug fix: this used to name signal.actorId instead of the caller.
+    await this.emitEvent("expertise_signal_registered", "expertise_signals", id, callerActorId);
     return record;
   }
 
@@ -910,11 +972,12 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   // Reports
   // ============================================================
 
-  async registerReport(report: ReportCreate): Promise<Report> {
+  async registerReport(report: ReportCreate, callerActorId: ActorId): Promise<Report> {
     const id = reportId(this.nextReportId++);
     const record: Report = { ...report, id, createdAt: new Date() };
     this.reports.set(id, record);
-    await this.emitEvent("report_created", "reports", id, report.actorId, {
+    // Bug fix: this used to name report.actorId instead of the caller.
+    await this.emitEvent("report_created", "reports", id, callerActorId, {
       scope: report.scope,
       snapshot: record as unknown as Record<string, unknown>,
     });

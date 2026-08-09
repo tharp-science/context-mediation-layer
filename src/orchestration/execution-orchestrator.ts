@@ -229,7 +229,7 @@ export class ExecutionOrchestrator {
         actorId,
         description: `Execution step failed to start: ${params.task}`,
         outcome: `Error: ${err}`,
-      });
+      }, actorId);
 
       await this.releaseWorkspace(workspaceId, requestId, intentId, actorId, eventIds);
 
@@ -294,7 +294,7 @@ export class ExecutionOrchestrator {
       outcome: status === "completed"
         ? runtimeResult.output ?? "completed"
         : runtimeResult.error ?? status,
-    });
+    }, actorId);
 
     // 9. Release workspace
     await this.releaseWorkspace(workspaceId, requestId, intentId, actorId, eventIds);

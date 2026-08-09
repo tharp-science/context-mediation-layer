@@ -1,7 +1,15 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { isValidClaimTransition } from "../../src/governance/domain.js";
-import { InMemoryGovernanceRepository } from "../../src/governance/repository.js";
+import { GovernanceRepository, InMemoryGovernanceRepository } from "../../src/governance/repository.js";
+import { SqliteGovernanceRepository } from "../../src/governance/sqlite-governance-repository.js";
 import { actorId, domainId, intendId, interpretationId } from "../../src/governance/domain.js";
+
+// Fresh instance of each repository implementation, so cross-repository invariants can be
+// exercised identically. The SQLite instance is opened on ":memory:"; callers that iterate
+// this must close any SqliteGovernanceRepository they receive (see instanceof checks below).
+function repositories(): GovernanceRepository[] {
+  return [new InMemoryGovernanceRepository(), new SqliteGovernanceRepository(":memory:")];
+}
 
 describe("Claim Lifecycle", () => {
   it("allows active -> released", () => {
@@ -531,5 +539,60 @@ describe("Governance store updates", () => {
       expect(children).toHaveLength(1);
       expect(children[0].id).toBe(child.id);
     });
+  });
+});
+
+// ============================================================
+// Event attribution (Task 0): repositories emit with the caller
+// ============================================================
+
+describe("Event attribution", () => {
+  it("superseding attributes the event to the superseder, not the original author", async () => {
+    for (const repo of repositories()) {
+      try {
+        const domain = await repo.registerDomain(
+          { scope: "default", name: "Attribution domain", concern: "test" },
+          actorId(0)
+        );
+        const author = await repo.registerActor(
+          { name: "attribution-author", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(0)
+        );
+        const superseder = await repo.registerActor(
+          { name: "attribution-superseder", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(0)
+        );
+
+        const intent = await repo.createIntent(
+          { scope: "default", description: "P", source: "t" },
+          author.id
+        );
+        const interp = await repo.createInterpretation(
+          { intentId: intent.id, domainId: domain.id, actorId: author.id, title: "by author" },
+          author.id
+        );
+
+        const result = await repo.supersedeInterpretation(
+          interp.id,
+          "by superseder",
+          "revised",
+          undefined,
+          undefined,
+          superseder.id
+        );
+        if ("code" in result) throw new Error(`supersede failed: ${result.message}`);
+
+        const events = await repo.listEvents({ entityTable: "interpretations" });
+        const supersede = events.filter((e) => e.eventType === "interpretation_superseded");
+        expect(supersede[supersede.length - 1].actorId).toBe(superseder.id);
+
+        // The replacement interpretation_filed event is also attributed to the superseder,
+        // not the original author it inherits its authorship fields from.
+        const filed = events.filter((e) => e.eventType === "interpretation_filed");
+        expect(filed[filed.length - 1].actorId).toBe(superseder.id);
+      } finally {
+        if (repo instanceof SqliteGovernanceRepository) repo.close();
+      }
+    }
   });
 });

@@ -63,9 +63,14 @@ deliberately not named `provenance`, which in revision 1 meant origin and mandat
 together.
 
 Interpretations and actions already carry a mandating intent; reports either require
-one in this phase or remain explicitly unmandated. A proxy-emitted action under a
-direct-emitted intent is therefore already expressible; it just needs the one field to
-say so.
+one in this phase or remain explicitly unmandated. They remain explicitly unmandated:
+`reports.intent_id` stays nullable and gains `unmandated_reason`, a nullable text
+column. Present means the absence of a mandate was a decision and says why; absent,
+with a null `intent_id`, means unrecorded. A silent null and a considered "no mandate"
+currently look identical, which is the same invisibility `origin_kind` exists to fix.
+
+A proxy-emitted action under a direct-emitted intent is therefore already expressible;
+it just needs the one field to say so.
 
 `origin_kind` is derived from transport in this phase: a write arriving through the
 operator's own CLI session is `direct`, anything else is `proxy`. That is assertable
@@ -142,11 +147,12 @@ This phase adds per-permission detail to a page that is already useful without i
 | Change | Phase | Note |
 | --- | --- | --- |
 | `origin_kind` | A | `direct` / `proxy`, default `proxy` |
+| `unmandated_reason` on `reports` | A | nullable; present means deliberately unmandated |
 | `status` on `scopes`, `domains` | B | additive, existing helper |
 | `contract_grants` | D | `(contract_id, permission)` |
 | `role_scopes` | D | `(role_id, scope)` |
 
-Four changes, two of them in the last phase. No migration framework: column additions
+Five changes, two of them in the last phase. No migration framework: column additions
 use the existing idempotent helper, and the two tables follow the
 `ensureProvisionedIdentitySchema()` pattern.
 
@@ -172,10 +178,9 @@ grants. That is the deliberate trade.
 access on the operator's machine can present as `direct`. It closes the invisible case,
 not the determined one. Labelled as such wherever it is displayed.
 
-**One open item in Phase A:** whether `reports` require a mandating intent or may be
-explicitly unmandated. `reports.intent_id` is currently nullable, so both are
-reachable; the choice is between tightening it and recording "unmandated" as a
-deliberate state rather than a silent null.
+**Legacy reports stay ambiguous.** Existing rows with a null `intent_id` and no
+`unmandated_reason` cannot be told apart retrospectively — they read as unrecorded, not
+as unmandated, and no attempt is made to guess which they were.
 
 **Unclassified is a large set on day one** — 13 actors and at least one role. Visible
 rather than blocking, so it can be worked down at leisure.

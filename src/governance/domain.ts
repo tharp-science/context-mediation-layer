@@ -192,6 +192,7 @@ export interface Intent {
   status: IntentStatus;
   version: number; // incremented on each update
   source: string; // who seeded it (channel/person)
+  originKind: OriginKind; // who emitted this record: operator directly, or by proxy
   addressedTo?: ActorId; // optional routing to a specific actor
   parentId?: IntentId; // null = top-level directive, set = delegation sub-intent
   createdAt: Date;

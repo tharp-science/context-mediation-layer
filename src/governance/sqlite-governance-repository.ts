@@ -32,6 +32,7 @@ import {
   InterpretationEnriched,
   InterpretationId,
   InterpretationStatus,
+  OriginKind,
   Report,
   ReportId,
   GovernanceRole,
@@ -95,6 +96,7 @@ function intentFromRow(row: Row): Intent {
     status: String(row.status) as IntentStatus,
     version: Number(row.version),
     source: String(row.source),
+    originKind: (row.origin_kind as OriginKind) ?? "proxy",
     addressedTo: row.addressed_to == null ? undefined : actorId(Number(row.addressed_to)),
     parentId: row.parent_id == null ? undefined : intendId(Number(row.parent_id)),
     createdAt: asDate(row.created_at),
@@ -361,6 +363,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     const reportColumns = hasReports ? this.tableColumns("reports") : new Set<string>();
     const invocationSchemaCurrent = ["assumed_role", "invoked_skill_ref", "policy_ref"]
       .every((column) => actionColumns.has(column) && reportColumns.has(column));
+    const intentColumns = this.tableColumns("intents");
+    const originSchemaCurrent = intentColumns.has("origin_kind");
     if (
       actorSchemaCurrent &&
       hasActorSessions &&
@@ -371,7 +375,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       hasContracts &&
       contractAuthoritySchemaCurrent &&
       actionAuthoritySchemaCurrent &&
-      invocationSchemaCurrent
+      invocationSchemaCurrent &&
+      originSchemaCurrent
     ) return;
 
     try {
@@ -391,6 +396,7 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       this.addColumnIfMissing("actions", "policy_ref", "policy_ref TEXT");
       this.addColumnIfMissing("actions", "domain_id", "domain_id INTEGER REFERENCES domains(id)");
       this.addColumnIfMissing("actions", "governing_contract_key", "governing_contract_key TEXT");
+      this.addColumnIfMissing("intents", "origin_kind", "origin_kind TEXT NOT NULL DEFAULT 'proxy'");
       this.db.exec("UPDATE actors SET created_at = COALESCE(created_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')), updated_at = COALESCE(updated_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))");
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS roles (
@@ -512,13 +518,14 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     callerActorId: ActorId
   ): Promise<Intent> {
     const result = this.db.prepare(
-      `INSERT INTO intents (scope, description, status, source, addressed_to, parent_id)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO intents (scope, description, status, source, origin_kind, addressed_to, parent_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(
       intent.scope,
       intent.description,
       intent.status ?? "draft",
       intent.source,
+      intent.originKind ?? "proxy",
       intent.addressedTo ?? null,
       intent.parentId ?? null
     );

@@ -46,6 +46,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
         scope: "default",
         description: "Verify M2 mechiso runs completed on server",
         source: "test",
+        originKind: "proxy",
         status: "active",
       },
       actorId(1)
@@ -219,6 +220,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
         scope: "default",
         description: "Already closed intent",
         source: "test",
+        originKind: "proxy",
         status: "closed",
       },
       actorId(1)
@@ -245,6 +247,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
         scope: "default",
         description: "Still in draft",
         source: "test",
+        originKind: "proxy",
         // status defaults to "draft"
       },
       actorId(1)
@@ -283,7 +286,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
 
     // Create a second intent with its own interpretation
     const otherIntent = await repo.createIntent(
-      { scope: "default", description: "Other intent", source: "test", status: "active" },
+      { scope: "default", description: "Other intent", source: "test", originKind: "proxy", status: "active" },
       actorId(1)
     );
     const otherInterp = await repo.createInterpretation({
@@ -399,6 +402,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
         scope: "product",
         description: "Deploy staging environment for client demo",
         source: "ops-team",
+        originKind: "proxy",
         status: "active",
       },
       actorId(1)

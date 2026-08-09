@@ -224,6 +224,7 @@ if (command === "create") {
       scope: "default",
       description: "Existing MCP operator intent",
       source: "test",
+      originKind: "proxy",
       status: "active",
     }, actorId(1));
 
@@ -550,6 +551,7 @@ if (command === "create") {
       scope: "default",
       description: "MCP vault mandate",
       source: "test",
+      originKind: "proxy",
     }, actorId(1));
 
     const response = await server.handle({
@@ -622,6 +624,7 @@ if (command === "create") {
       scope: "default",
       description: "MCP append mandate",
       source: "test",
+      originKind: "proxy",
     }, actorId(1));
     const response = await server.handle({
       jsonrpc: "2.0",

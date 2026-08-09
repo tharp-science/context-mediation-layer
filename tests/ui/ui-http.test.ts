@@ -29,6 +29,7 @@ describe("cml-ui HTTP surface", () => {
       scope: "default",
       description: "Build an operator surface",
       source: "test",
+      originKind: "proxy",
       status: "active",
     }, actorId(1));
     await repo.createInterpretation({

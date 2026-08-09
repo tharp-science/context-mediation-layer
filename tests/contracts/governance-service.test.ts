@@ -55,6 +55,22 @@ describe("GovernanceService", () => {
       const svc = new GovernanceService(new InMemoryGovernanceRepository(), { origin: "direct" });
       expect(svc.origin).toBe("direct");
     });
+
+    it("stamps proxy on intents by default", async () => {
+      const svc = new GovernanceService(new InMemoryGovernanceRepository());
+      const result = await svc.registerIntent({ description: "Proxy intent", source: "test", actorId: 1 });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.originKind).toBe("proxy");
+    });
+
+    it("stamps direct on intents when the service is constructed direct", async () => {
+      const svc = new GovernanceService(new InMemoryGovernanceRepository(), { origin: "direct" });
+      const result = await svc.registerIntent({ description: "Direct intent", source: "test", actorId: 1 });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.originKind).toBe("direct");
+    });
   });
 
   // ----------------------------------------------------------
@@ -385,7 +401,7 @@ describe("GovernanceService", () => {
         defaultScope: "default",
       }, actorId(0));
       await repo.createIntent(
-        { description: "History test", source: "test", scope: "default" },
+        { description: "History test", source: "test", originKind: "proxy", scope: "default" },
         actor.id
       );
 

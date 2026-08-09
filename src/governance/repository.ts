@@ -309,6 +309,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     const record: Intent = {
       ...intent,
       status: intent.status ?? "draft",
+      originKind: intent.originKind ?? "proxy",
       id,
       version: 1,
       createdAt: now,

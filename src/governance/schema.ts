@@ -117,6 +117,7 @@ CREATE TABLE IF NOT EXISTS intents (
     status           TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'closed', 'superseded')),
     version          INTEGER NOT NULL DEFAULT 1,
     source           TEXT NOT NULL,
+    origin_kind      TEXT NOT NULL DEFAULT 'proxy' CHECK (origin_kind IN ('direct', 'proxy')),
     addressed_to     INTEGER,
     parent_id        INTEGER,
     created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),

@@ -147,6 +147,7 @@ async function fixture() {
     scope: "default",
     description: "Resolve operator sidebar divergence",
     source: "test",
+    originKind: "proxy",
     status: "active",
   }, actorId(1));
   await repo.createInterpretation({

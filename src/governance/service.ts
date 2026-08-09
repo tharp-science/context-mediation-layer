@@ -189,6 +189,7 @@ export class GovernanceService {
       {
         description: params.description,
         source: params.source,
+        originKind: this.origin,
         scope: params.scope ?? "default",
         addressedTo: params.addressedTo != null ? toActorId(params.addressedTo) : undefined,
         parentId: params.parentId != null ? intendId(params.parentId) : undefined,

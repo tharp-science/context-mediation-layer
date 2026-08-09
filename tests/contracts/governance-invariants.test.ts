@@ -30,6 +30,7 @@ describe("InMemoryGovernanceRepository", () => {
       description: "Test intent",
       status: "draft",
       source: "test",
+      originKind: "proxy",
     }, actorId(1));
 
     expect(intent.description).toBe("Test intent");
@@ -46,6 +47,7 @@ describe("InMemoryGovernanceRepository", () => {
       description: "Versioned intent",
       status: "draft",
       source: "test",
+      originKind: "proxy",
     }, actorId(1));
 
     const updated = await repo.updateIntent(intent.id, { status: "active" }, "activating intent", actorId(1));
@@ -63,6 +65,7 @@ describe("InMemoryGovernanceRepository", () => {
       description: "Intent for interpretation",
       status: "active",
       source: "test",
+      originKind: "proxy",
     }, actorId(1));
 
     await repo.createInterpretation({
@@ -85,6 +88,7 @@ describe("InMemoryGovernanceRepository", () => {
       description: "Intent",
       status: "active",
       source: "test",
+      originKind: "proxy",
     }, actorId(1));
 
     const interp = await repo.createInterpretation({
@@ -113,6 +117,7 @@ describe("InMemoryGovernanceRepository", () => {
       description: "Intent",
       status: "active",
       source: "test",
+      originKind: "proxy",
     }, actorId(1));
 
     const action = await repo.logAction({
@@ -148,7 +153,7 @@ describe("InMemoryGovernanceRepository", () => {
   it("emits events on entity creation", async () => {
     const a = actorId(1);
     await repo.createIntent(
-      { scope: "default", description: "Event test", status: "draft", source: "test" },
+      { scope: "default", description: "Event test", status: "draft", source: "test", originKind: "proxy" },
       a
     );
 
@@ -172,6 +177,7 @@ describe("Governance store updates", () => {
       scope: "default",
       description: "Governance update test intent",
       source: "test",
+      originKind: "proxy",
     }, actorId(1));
     const interp = await repo.createInterpretation({
       intentId: intent.id,
@@ -214,6 +220,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Reason test",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
 
       await repo.updateIntent(intent.id, { status: "active" }, "activating for execution", actorId(1));
@@ -310,6 +317,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Alignment test",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
 
       await repo.createInterpretation({
@@ -350,6 +358,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "No status provided",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
       expect(intent.status).toBe("draft");
     });
@@ -360,6 +369,7 @@ describe("Governance store updates", () => {
         description: "Explicit active",
         status: "active",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
       expect(intent.status).toBe("active");
     });
@@ -369,6 +379,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Defaults test",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
 
       const interp = await repo.createInterpretation({
@@ -387,6 +398,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Override test",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
 
       const interp = await repo.createInterpretation({
@@ -413,6 +425,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Enriched read test",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
 
       // Add two interpretations
@@ -453,6 +466,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Linked read test",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
 
       const interp = await repo.createInterpretation({
@@ -487,12 +501,14 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Parent directive",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
 
       const child = await repo.createIntent({
         scope: "default",
         description: "Sub-intent delegation",
         source: "test",
+        originKind: "proxy",
         parentId: parent.id,
       }, actorId(1));
 
@@ -504,6 +520,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Top-level",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
 
       expect(intent.parentId).toBeUndefined();
@@ -514,12 +531,14 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Parent",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
 
       await repo.createIntent({
         scope: "default",
         description: "Child",
         source: "test",
+        originKind: "proxy",
         parentId: parent.id,
       }, actorId(1));
 
@@ -533,12 +552,14 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Parent",
         source: "test",
+        originKind: "proxy",
       }, actorId(1));
 
       const child = await repo.createIntent({
         scope: "default",
         description: "Child of parent",
         source: "test",
+        originKind: "proxy",
         parentId: parent.id,
       }, actorId(1));
 
@@ -571,7 +592,7 @@ describe("Event attribution", () => {
         );
 
         const intent = await repo.createIntent(
-          { scope: "default", description: "P", source: "t" },
+          { scope: "default", description: "P", source: "t", originKind: "proxy" },
           author.id
         );
         const interp = await repo.createInterpretation(

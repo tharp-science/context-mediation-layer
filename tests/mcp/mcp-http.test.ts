@@ -68,6 +68,7 @@ if (command === "create") {
       scope: "default",
       description: "MCP HTTP mandate",
       source: "test",
+      originKind: "proxy",
       status: "active",
     }, actorId(1));
 

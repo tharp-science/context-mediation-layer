@@ -1,18 +1,32 @@
 import { execFile } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { appendFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, relative, resolve } from "node:path";
+import { basename, dirname, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
+import { envValue } from "../config/env.js";
 
 const execFileAsync = promisify(execFile);
 const DEFAULT_SEARCH_LIMIT = 20;
+const DEFAULT_FIND_LIMIT = 20;
 const MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024;
 
 export interface VaultCommandResult {
   operation: string;
   path?: string;
   data?: string;
+  manifest?: VaultMutationManifest;
+}
+
+export interface VaultMutationManifest {
+  files: VaultFileChange[];
+}
+
+export interface VaultFileChange {
+  path: string;
+  change: "created" | "changed" | "deleted" | "moved";
+  operation: string;
+  destination?: string;
 }
 
 export interface ObsidianVaultServiceOptions {
@@ -40,7 +54,7 @@ export class ObsidianVaultService {
   constructor(options: ObsidianVaultServiceOptions = {}) {
     this.obsidianBin = options.obsidianBin ?? "obsidian";
     this.vaultName = options.vaultName;
-    this.vaultRoot = options.vaultRoot ?? options.env?.CML_VAULT_ROOT;
+    this.vaultRoot = options.vaultRoot ?? envValue("CML_VAULT_ROOT", options.env);
     this.timeoutMs = options.timeoutMs ?? 30_000;
     this.env = options.env ?? process.env;
   }
@@ -72,13 +86,32 @@ export class ObsidianVaultService {
     return { operation: "search", data };
   }
 
+  async find(query: string, options: { path?: string; limit?: number; format?: "text" | "json" } = {}): Promise<VaultCommandResult> {
+    if (query.trim().length === 0) throw new VaultPathError("Find query must not be empty");
+    if (this.vaultRoot) {
+      const data = await this.findFilesystem(query, options);
+      return { operation: "find", data };
+    }
+    const args = ["search", `query=${query}`];
+    if (options.path) args.push(`path=${safeVaultPath(options.path)}`);
+    if (options.limit != null) {
+      if (!Number.isInteger(options.limit) || options.limit < 1) throw new VaultPathError("Find limit must be a positive integer");
+      args.push(`limit=${options.limit}`);
+    }
+    if (options.format) args.push(`format=${options.format}`);
+    const data = await this.run(args);
+    return { operation: "find", data };
+  }
+
   async write(path: string, content: string): Promise<VaultCommandResult> {
     const safePath = safeVaultPath(path);
     if (this.vaultRoot) {
       const absolute = this.resolveVaultPath(safePath);
+      const existed = await pathExists(absolute);
       await mkdir(dirname(absolute), { recursive: true });
       await writeFile(absolute, content);
-      return { operation: "write", path: safePath, data: "written" };
+      const change = existed ? "changed" : "created";
+      return { operation: "write", path: safePath, data: change, manifest: manifest([{ path: safePath, change, operation: "write" }]) };
     }
     const data = await this.run(["create", `path=${safePath}`, `content=${content}`, "overwrite"]);
     return { operation: "write", path: safePath, data };
@@ -91,7 +124,8 @@ export class ObsidianVaultService {
       await mkdir(dirname(absolute), { recursive: true });
       const exists = await pathExists(absolute);
       await appendFile(absolute, `${exists ? "\n" : ""}${content}`);
-      return { operation: "append", path: safePath, data: "appended" };
+      const change = exists ? "changed" : "created";
+      return { operation: "append", path: safePath, data: change, manifest: manifest([{ path: safePath, change, operation: "append" }]) };
     }
     const data = await this.run(["append", `path=${safePath}`, `content=${content}`]);
     return { operation: "append", path: safePath, data };
@@ -103,9 +137,18 @@ export class ObsidianVaultService {
     if (this.vaultRoot) {
       const source = this.resolveVaultPath(safePath);
       const destination = this.resolveVaultPath(safeDestination);
+      const destinationExisted = await pathExists(destination);
       await mkdir(dirname(destination), { recursive: true });
       await rename(source, destination);
-      return { operation: "move", path: safeDestination, data: "moved" };
+      return {
+        operation: "move",
+        path: safeDestination,
+        data: "moved",
+        manifest: manifest([
+          { path: safePath, change: "moved", operation: "move", destination: safeDestination },
+          { path: safeDestination, change: destinationExisted ? "changed" : "created", operation: "move" },
+        ]),
+      };
     }
     const data = await this.run(["move", `path=${safePath}`, `to=${safeDestination}`]);
     return { operation: "move", path: safeDestination, data };
@@ -114,8 +157,15 @@ export class ObsidianVaultService {
   async delete(path: string): Promise<VaultCommandResult> {
     const safePath = safeVaultPath(path);
     if (this.vaultRoot) {
-      await rm(this.resolveVaultPath(safePath), { force: true });
-      return { operation: "delete", path: safePath, data: "deleted" };
+      const absolute = this.resolveVaultPath(safePath);
+      const existed = await pathExists(absolute);
+      await rm(absolute, { force: true });
+      return {
+        operation: "delete",
+        path: safePath,
+        data: existed ? "deleted" : "not_found",
+        manifest: existed ? manifest([{ path: safePath, change: "deleted", operation: "delete" }]) : manifest([]),
+      };
     }
     const data = await this.run(["delete", `path=${safePath}`]);
     return { operation: "delete", path: safePath, data };
@@ -157,6 +207,42 @@ export class ObsidianVaultService {
     return results.map((result) => `${result.path}:${result.line}: ${result.preview}`).join("\n");
   }
 
+  private async findFilesystem(query: string, options: { path?: string; limit?: number; format?: "text" | "json" }): Promise<string> {
+    const limit = options.limit ?? DEFAULT_FIND_LIMIT;
+    if (!Number.isInteger(limit) || limit < 1) throw new VaultPathError("Find limit must be a positive integer");
+    const basePath = options.path ? safeVaultPath(options.path) : undefined;
+    const start = this.resolveVaultPath(basePath ?? ".");
+    const root = resolve(this.vaultRoot!);
+    const normalizedQuery = normalizeFindQuery(query);
+    const startStat = await stat(start);
+    const entries = startStat.isDirectory()
+      ? walkEntries(start)
+      : singleEntry(start, startStat.isDirectory() ? "directory" : "file");
+    const matches: Array<{ path: string; name: string; kind: "file" | "directory"; match: string; score: number }> = [];
+
+    for await (const entry of entries) {
+      const vaultRelativePath = relative(root, entry.absolute).split(/[\\/]+/).join("/");
+      if (!vaultRelativePath || vaultRelativePath.startsWith(".obsidian/")) continue;
+      const match = classifyPathMatch(vaultRelativePath, normalizedQuery);
+      if (!match) continue;
+      matches.push({
+        path: vaultRelativePath,
+        name: basename(vaultRelativePath),
+        kind: entry.kind,
+        match: match.kind,
+        score: match.score + (entry.kind === "directory" ? 0.1 : 0),
+      });
+    }
+
+    const results = matches
+      .sort((a, b) => a.score - b.score || a.path.localeCompare(b.path))
+      .slice(0, limit)
+      .map(({ score: _score, ...result }) => result);
+
+    if (options.format === "json") return JSON.stringify(results, null, 2);
+    return results.map((result) => `${result.path}\t${result.kind}\t${result.match}`).join("\n");
+  }
+
   private async run(args: string[]): Promise<string> {
     const commandArgs = this.vaultName ? [...args, `vault=${this.vaultName}`] : args;
     try {
@@ -182,6 +268,10 @@ export class ObsidianVaultService {
   }
 }
 
+function manifest(files: VaultFileChange[]): VaultMutationManifest {
+  return { files };
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await stat(path);
@@ -202,6 +292,37 @@ async function* walkFiles(root: string): AsyncGenerator<string> {
       yield absolute;
     }
   }
+}
+
+async function* walkEntries(root: string): AsyncGenerator<{ absolute: string; kind: "file" | "directory" }> {
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const absolute = resolve(root, entry.name);
+    if (entry.isDirectory()) {
+      yield { absolute, kind: "directory" };
+      yield* walkEntries(absolute);
+    } else if (entry.isFile()) {
+      yield { absolute, kind: "file" };
+    }
+  }
+}
+
+async function* singleEntry(absolute: string, kind: "file" | "directory"): AsyncGenerator<{ absolute: string; kind: "file" | "directory" }> {
+  yield { absolute, kind };
+}
+
+function normalizeFindQuery(query: string): string {
+  return query.trim().replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
+}
+
+function classifyPathMatch(path: string, lowerQuery: string): { kind: string; score: number } | undefined {
+  const lowerPath = path.toLowerCase();
+  const lowerName = basename(path).toLowerCase();
+  if (lowerPath === lowerQuery || lowerName === lowerQuery) return { kind: "exact", score: 0 };
+  if (lowerName.startsWith(lowerQuery)) return { kind: "name_prefix", score: 1 };
+  if (lowerName.includes(lowerQuery)) return { kind: "name", score: 2 };
+  if (lowerPath.includes(lowerQuery)) return { kind: "path", score: 3 };
+  return undefined;
 }
 
 async function searchFile(file: string, lowerQuery: string, vaultRelativePath: string, limit: number): Promise<Array<{ path: string; line: number; preview: string }>> {

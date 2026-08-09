@@ -44,6 +44,7 @@ import {
   ContractStatus,
   Report,
   ReportId,
+  OriginKind,
   isValidClaimTransition,
   intendId,
   interpretationId,
@@ -136,7 +137,8 @@ export interface GovernanceRepository {
     reason: string,
     newScopeAssumption: string | undefined,
     newStatus: InterpretationStatus | undefined,
-    callerActorId: ActorId
+    callerActorId: ActorId,
+    replacementOriginKind: OriginKind
   ): Promise<{ old: Interpretation; replacement: Interpretation } | RepositoryError>;
   listInterpretations(filters?: {
     intentId?: IntentId;
@@ -447,13 +449,15 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     reason: string,
     newScopeAssumption: string | undefined,
     newStatus: InterpretationStatus | undefined,
-    callerActorId: ActorId
+    callerActorId: ActorId,
+    replacementOriginKind: OriginKind
   ): Promise<{ old: Interpretation; replacement: Interpretation } | RepositoryError> {
     const interp = this.interpretations.get(id);
     if (!interp) return { code: "NOT_FOUND", message: `Interpretation ${id} not found` };
 
-    // Create replacement with same actor/domain/intent, reset alignment. The replacement's
-    // authorship fields are inherited from the original — only the event actor changes.
+    // Create replacement with same actor/domain/intent, reset alignment. Origin is not
+    // inherited from the original: the actor performing the supersession emitted this
+    // row, so it carries replacementOriginKind, not interp.originKind.
     const replacementId = interpretationId(this.nextInterpretationId++);
     const now = new Date();
     const replacement: Interpretation = {
@@ -465,10 +469,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       scopeAssumption: newScopeAssumption,
       alignment: "uncertain",
       status: newStatus ?? "clarifying",
-      // Not stamped from service origin here — Task 4 handles the replacement row's
-      // origin together with the reports work. Defaults to "proxy", matching the SQLite
-      // side's schema default when the INSERT omits the column.
-      originKind: "proxy",
+      originKind: replacementOriginKind,
       createdAt: now,
       updatedAt: now,
     };

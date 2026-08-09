@@ -272,7 +272,8 @@ function usage(): ServiceResponse<{ commands: string[] }> {
         "cml role list|get|register|bind|bindings",
         "cml actor-type register|get|list",
         "cml session open|heartbeat|close|list",
-        "cml report create|list|get",
+        "cml report create [--unmandated-reason <why>]",
+        "cml report list|get",
         "cml contract register|get|list|supersede|import",
         "cml domain register|list|get",
         "cml scope register|list",
@@ -977,6 +978,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         assumedRole: flag(flags, "assumed-role"),
         invokedSkillRef: flag(flags, "invoked-skill-ref"),
         policyRef: flag(flags, "policy-ref"),
+        unmandatedReason: flag(flags, "unmandated-reason"),
       });
     }
     if (op === "list") {

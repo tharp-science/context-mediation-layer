@@ -961,6 +961,68 @@ describe("GovernanceService", () => {
     });
   });
 
+  describe("report mandate", () => {
+    it("records an explicit reason for an unmandated report", async () => {
+      const repo = new InMemoryGovernanceRepository();
+      const svc = new GovernanceService(repo);
+      // registerReport (unlike registerInterpretation/logAction) requires a real
+      // registered actor, so seed one rather than using a bare numeric actorId.
+      const actor = await svc.registerActor({
+        name: "unmandated-report-actor",
+        role: "agent",
+        provider: "openai-codex",
+        capabilityNamespace: "build",
+      });
+      if (!actor.ok) throw new Error("actor register failed");
+
+      const result = await svc.registerReport({
+        kind: "note", title: "R", summary: "S", actorId: actor.data.id,
+        unmandatedReason: "standalone observation, no active intent",
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.intentId).toBeUndefined();
+      expect(result.data.unmandatedReason).toBe("standalone observation, no active intent");
+    });
+
+    it("leaves unmandatedReason undefined when a report carries an intent", async () => {
+      const repo = new InMemoryGovernanceRepository();
+      const svc = new GovernanceService(repo);
+      const actor = await svc.registerActor({
+        name: "mandated-report-actor",
+        role: "agent",
+        provider: "openai-codex",
+        capabilityNamespace: "build",
+      });
+      if (!actor.ok) throw new Error("actor register failed");
+      const intent = await svc.registerIntent({ description: "P", source: "test", actorId: actor.data.id });
+      if (!intent.ok) throw new Error("intent failed");
+      const result = await svc.registerReport({
+        kind: "note", title: "R", summary: "S", actorId: actor.data.id, intentId: intent.data.id,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.unmandatedReason).toBeUndefined();
+    });
+
+    it("carries origin onto a superseding interpretation", async () => {
+      const repo = new InMemoryGovernanceRepository();
+      const svc = new GovernanceService(repo, { origin: "direct" });
+      const intent = await svc.registerIntent({ description: "P", source: "test", actorId: 1 });
+      if (!intent.ok) throw new Error("intent failed");
+      const interp = await svc.registerInterpretation({
+        intentId: intent.data.id, domainId: 1, actorId: 1, title: "first",
+      });
+      if (!interp.ok) throw new Error("interp failed");
+      const result = await svc.supersedeInterpretation({
+        id: interp.data.id, newTitle: "second", reason: "revised",
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.data.replacement.originKind).toBe("direct");
+    });
+  });
+
   // ----------------------------------------------------------
   // Domains
   // ----------------------------------------------------------

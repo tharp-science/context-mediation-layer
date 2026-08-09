@@ -233,6 +233,7 @@ CREATE TABLE IF NOT EXISTS reports (
     intent_id   INTEGER,
     source_ref  TEXT,
     origin_kind TEXT NOT NULL DEFAULT 'proxy' CHECK (origin_kind IN ('direct', 'proxy')),
+    unmandated_reason TEXT,
     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     FOREIGN KEY (scope) REFERENCES scopes(name),
     FOREIGN KEY (actor_id) REFERENCES actors(id),

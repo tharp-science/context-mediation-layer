@@ -239,3 +239,75 @@ describe("origin_kind schema evolution against pre-existing databases", () => {
     }
   });
 });
+
+describe("unmandated_reason schema evolution against pre-existing databases", () => {
+  it("adds unmandated_reason to a reports table that is otherwise fully current", () => {
+    // A DB built entirely by the current code is current on every other guard in
+    // ensureProvisionedIdentitySchema (actorSchemaCurrent, originSchemaCurrent, etc).
+    // Dropping only unmandated_reason isolates reportMandateSchemaCurrent: if Task 4
+    // forgot to AND it into the early-return condition, this DB would look current
+    // and the migration would never run, leaving the column missing.
+    const dbPath = makeTempDbPath();
+    try {
+      const seed = new SqliteGovernanceRepository(dbPath);
+      seed.close();
+
+      const raw = new DatabaseSync(dbPath);
+      raw.exec("ALTER TABLE reports DROP COLUMN unmandated_reason");
+      raw.close();
+
+      const repo = new SqliteGovernanceRepository(dbPath);
+      try {
+        const raw2 = (repo as unknown as { db: DatabaseSync }).db;
+        const names = new Set(
+          (raw2.prepare("PRAGMA table_info(reports)").all() as { name: string }[]).map((r) => r.name)
+        );
+        expect(names.has("unmandated_reason")).toBe(true);
+      } finally {
+        repo.close();
+      }
+    } finally {
+      rmSync(path.dirname(dbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("round-trips unmandatedReason through a database evolved from a pre-Task-4 state", async () => {
+    const dbPath = makeTempDbPath();
+    try {
+      const seed = new SqliteGovernanceRepository(dbPath);
+      seed.close();
+
+      const raw = new DatabaseSync(dbPath);
+      raw.exec("ALTER TABLE reports DROP COLUMN unmandated_reason");
+      raw.close();
+
+      const repo = new SqliteGovernanceRepository(dbPath);
+      try {
+        const actor = await repo.registerActor(
+          { name: "mandate-evo-actor", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(0)
+        );
+        const report = await repo.registerReport(
+          {
+            scope: "default",
+            kind: "note",
+            title: "r",
+            summary: "s",
+            actorId: actor.id,
+            originKind: "direct",
+            unmandatedReason: "standalone observation, no active intent",
+          },
+          actor.id
+        );
+        expect(report.unmandatedReason).toBe("standalone observation, no active intent");
+
+        const reread = await repo.getReport(report.id);
+        expect(reread?.unmandatedReason).toBe("standalone observation, no active intent");
+      } finally {
+        repo.close();
+      }
+    } finally {
+      rmSync(path.dirname(dbPath), { recursive: true, force: true });
+    }
+  });
+});

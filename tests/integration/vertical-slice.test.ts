@@ -323,7 +323,8 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
       "Original was wrong",
       undefined,
       undefined,
-      actorId(1)
+      actorId(1),
+      "proxy"
     );
 
     const result = await orchestrator.executeStep({

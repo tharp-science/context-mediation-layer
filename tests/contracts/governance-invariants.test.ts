@@ -266,7 +266,8 @@ describe("Governance store updates", () => {
         "original was incomplete",
         undefined,
         undefined,
-        actorId(1)
+        actorId(1),
+        "proxy"
       );
 
       if ("code" in result) throw new Error("Expected supersession result");
@@ -293,7 +294,8 @@ describe("Governance store updates", () => {
         "no reason",
         undefined,
         undefined,
-        actorId(1)
+        actorId(1),
+        "proxy"
       );
       expect("code" in result && result.code).toBe("NOT_FOUND");
     });
@@ -301,7 +303,7 @@ describe("Governance store updates", () => {
     it("supersede emits events for both old and new", async () => {
       const { interp } = await seedInterpretation();
 
-      await repo.supersedeInterpretation(interp.id, "New title", "reason", undefined, undefined, actorId(1));
+      await repo.supersedeInterpretation(interp.id, "New title", "reason", undefined, undefined, actorId(1), "proxy");
 
       const events = await repo.listEvents({ entityTable: "interpretations" });
       const types = events.map((e) => e.eventType);
@@ -618,7 +620,8 @@ describe("Event attribution", () => {
           "revised",
           undefined,
           undefined,
-          superseder.id
+          superseder.id,
+          "direct"
         );
         if ("code" in result) throw new Error(`supersede failed: ${result.message}`);
 
@@ -630,6 +633,11 @@ describe("Event attribution", () => {
         // not the original author it inherits its authorship fields from.
         const filed = events.filter((e) => e.eventType === "interpretation_filed");
         expect(filed[filed.length - 1].actorId).toBe(superseder.id);
+
+        // The replacement row carries the superseder's origin ("direct"), not the
+        // original interpretation's ("proxy") — exercised against both repository
+        // implementations via the repositories() loop.
+        expect(result.replacement.originKind).toBe("direct");
       } finally {
         if (repo instanceof SqliteGovernanceRepository) repo.close();
       }

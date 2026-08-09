@@ -362,7 +362,8 @@ export class GovernanceService {
       params.reason,
       params.newScopeAssumption,
       params.newStatus,
-      current.actorId
+      current.actorId,
+      this.origin
     );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
@@ -1092,6 +1093,7 @@ export class GovernanceService {
     assumedRole?: string;
     invokedSkillRef?: string;
     policyRef?: string;
+    unmandatedReason?: string;
   }): Promise<ServiceResponse<Report>> {
     const actor = await this.repo.getActor(toActorId(params.actorId));
     if (!actor) return fail("NOT_FOUND", `Actor ${params.actorId} not found`);
@@ -1110,6 +1112,7 @@ export class GovernanceService {
       intentId: params.intentId != null ? intendId(params.intentId) : undefined,
       sourceRef: params.sourceRef,
       originKind: this.origin,
+      unmandatedReason: params.unmandatedReason,
     }, actor.id);
     return success(report);
   }

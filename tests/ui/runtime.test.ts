@@ -177,6 +177,6 @@ async function fixture() {
     alignment: "uncertain",
     originKind: "proxy",
   }, actorId(1));
-  await repo.supersedeInterpretation(interpretationId(3), "Replacement reading", "Runtime test", undefined, undefined, actorId(1));
+  await repo.supersedeInterpretation(interpretationId(3), "Replacement reading", "Runtime test", undefined, undefined, actorId(1), "proxy");
   return { repo, service: new GovernanceService(repo) };
 }

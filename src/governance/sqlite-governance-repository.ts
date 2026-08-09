@@ -312,6 +312,7 @@ function reportFromRow(row: Row): Report {
     intentId: row.intent_id == null ? undefined : intendId(Number(row.intent_id)),
     sourceRef: asString(row.source_ref),
     originKind: originKindFromRow(row.origin_kind),
+    unmandatedReason: asString(row.unmandated_reason),
     createdAt: asDate(row.created_at),
   };
 }
@@ -381,6 +382,7 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       this.tableColumns("interpretations").has("origin_kind") &&
       actionColumns.has("origin_kind") &&
       (!hasReports || reportColumns.has("origin_kind"));
+    const reportMandateSchemaCurrent = !hasReports || reportColumns.has("unmandated_reason");
     if (
       actorSchemaCurrent &&
       hasActorSessions &&
@@ -392,7 +394,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       contractAuthoritySchemaCurrent &&
       actionAuthoritySchemaCurrent &&
       invocationSchemaCurrent &&
-      originSchemaCurrent
+      originSchemaCurrent &&
+      reportMandateSchemaCurrent
     ) return;
 
     try {
@@ -525,6 +528,7 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       this.addColumnIfMissing("reports", "invoked_skill_ref", "invoked_skill_ref TEXT");
       this.addColumnIfMissing("reports", "policy_ref", "policy_ref TEXT");
       this.addColumnIfMissing("reports", "origin_kind", "origin_kind TEXT NOT NULL DEFAULT 'proxy'");
+      this.addColumnIfMissing("reports", "unmandated_reason", "unmandated_reason TEXT");
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -727,17 +731,20 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     reason: string,
     newScopeAssumption: string | undefined,
     newStatus: InterpretationStatus | undefined,
-    callerActorId: ActorId
+    callerActorId: ActorId,
+    replacementOriginKind: OriginKind
   ): Promise<{ old: Interpretation; replacement: Interpretation } | RepositoryError> {
     const current = await this.getInterpretation(id);
     if (!current) return { code: "NOT_FOUND", message: `Interpretation ${id} not found` };
 
     try {
       this.db.exec("BEGIN");
+      // The replacement row is emitted by the actor performing the supersession, not the
+      // original author — it carries replacementOriginKind, never current.originKind.
       const result = this.db.prepare(
         `INSERT INTO interpretations
-         (intent_id, domain_id, actor_id, title, scope_assumption, alignment, status, source_ref)
-         VALUES (?, ?, ?, ?, ?, 'uncertain', ?, ?)`
+         (intent_id, domain_id, actor_id, title, scope_assumption, alignment, status, source_ref, origin_kind)
+         VALUES (?, ?, ?, ?, ?, 'uncertain', ?, ?, ?)`
       ).run(
         current.intentId,
         current.domainId,
@@ -745,7 +752,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
         newTitle,
         newScopeAssumption ?? null,
         newStatus ?? "clarifying",
-        current.sourceRef ?? null
+        current.sourceRef ?? null,
+        replacementOriginKind
       );
       const replacementId = interpretationId(Number(result.lastInsertRowid));
       this.db.prepare(
@@ -1414,8 +1422,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
   async registerReport(report: ReportCreate, callerActorId: ActorId): Promise<Report> {
     const result = this.db.prepare(
       `INSERT INTO reports
-       (scope, kind, title, summary, body_ref, actor_id, assumed_role, invoked_skill_ref, policy_ref, domain_id, intent_id, source_ref, origin_kind)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (scope, kind, title, summary, body_ref, actor_id, assumed_role, invoked_skill_ref, policy_ref, domain_id, intent_id, source_ref, origin_kind, unmandated_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       report.scope,
       report.kind,
@@ -1429,7 +1437,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       report.domainId ?? null,
       report.intentId ?? null,
       report.sourceRef ?? null,
-      report.originKind ?? "proxy"
+      report.originKind ?? "proxy",
+      report.unmandatedReason ?? null
     );
     const created = await this.getReport(reportId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted report could not be read back");

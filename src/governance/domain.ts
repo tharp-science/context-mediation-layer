@@ -310,6 +310,7 @@ export interface Report {
   intentId?: IntentId;
   sourceRef?: string;
   originKind: OriginKind; // who emitted this record: operator directly, or by proxy
+  unmandatedReason?: string; // present = deliberately filed with no mandating intent
   createdAt: Date;
 }
 

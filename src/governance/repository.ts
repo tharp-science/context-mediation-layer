@@ -465,16 +465,18 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     const interp = this.interpretations.get(id);
     if (!interp) return { code: "NOT_FOUND", message: `Interpretation ${id} not found` };
 
-    // Create replacement with same actor/domain/intent, reset alignment. Origin is not
-    // inherited from the original: the actor performing the supersession emitted this
-    // row, so it carries replacementOriginKind, not interp.originKind.
+    // Create replacement with same domain/intent, reset alignment. Authorship is not
+    // inherited from the original: the actor performing the supersession authored this
+    // row, so it carries callerActorId and replacementOriginKind, not interp.actorId or
+    // interp.originKind. Attributing the replacement to the original author would violate
+    // the contract that records must never attribute work to an actor that did not author it.
     const replacementId = interpretationId(this.nextInterpretationId++);
     const now = new Date();
     const replacement: Interpretation = {
       id: replacementId,
       intentId: interp.intentId,
       domainId: interp.domainId,
-      actorId: interp.actorId,
+      actorId: callerActorId,
       title: newTitle,
       scopeAssumption: newScopeAssumption,
       alignment: "uncertain",

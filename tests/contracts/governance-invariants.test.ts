@@ -278,9 +278,15 @@ describe("Governance store updates", () => {
       expect(result.old.alignment).toBe("superseded");
       expect(result.old.supersededBy).toBe(result.replacement.id);
 
-      // Replacement inherits actor/domain/intent, resets alignment
+      // Replacement inherits domain/intent, resets alignment, and is authored by the
+      // caller — not the original author. This test's caller (actorId(1)) happens to be
+      // the same actor who authored the original interpretation, so this assertion alone
+      // can't distinguish caller-attribution from author-attribution; the old assertion
+      // here (`toBe(interp.actorId)`) encoded the old, incorrect behaviour of copying the
+      // original author's id. See the dedicated non-vacuous case below, where the caller
+      // and author differ, for proof the replacement is attributed to the caller.
       expect(result.replacement.title).toBe("Revised interpretation");
-      expect(result.replacement.actorId).toBe(interp.actorId);
+      expect(result.replacement.actorId).toBe(actorId(1));
       expect(result.replacement.domainId).toBe(interp.domainId);
       expect(result.replacement.intentId).toBe(interp.intentId);
       expect(result.replacement.alignment).toBe("uncertain");
@@ -645,6 +651,61 @@ describe("Event attribution", () => {
         // original interpretation's ("proxy") — exercised against both repository
         // implementations via the repositories() loop.
         expect(result.replacement.originKind).toBe("direct");
+      } finally {
+        if (repo instanceof SqliteGovernanceRepository) repo.close();
+      }
+    }
+  });
+
+  it("supersession replacement row is attributed to the caller, not the original author", async () => {
+    // Non-vacuous proof that supersedeInterpretation's replacement row names the actor
+    // who performed the supersession, not the actor who authored the original. Before
+    // the fix, the replacement's actor_id was copied from the original interpretation
+    // (current.actorId / interp.actorId) while its origin_kind was stamped with the
+    // caller's origin — a row that disagreed with itself. Run against both repository
+    // implementations via the repositories() loop.
+    for (const repo of repositories()) {
+      try {
+        const author = await repo.registerActor(
+          { name: "supersede-actorid-author", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(1)
+        );
+        const domain = await repo.registerDomain(
+          { scope: "default", name: "Supersede actorId domain", concern: "test" },
+          author.id
+        );
+        const superseder = await repo.registerActor(
+          { name: "supersede-actorid-superseder", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          author.id
+        );
+
+        const intent = await repo.createIntent(
+          { scope: "default", description: "P", source: "t", originKind: "proxy" },
+          author.id
+        );
+        const interp = await repo.createInterpretation(
+          { intentId: intent.id, domainId: domain.id, actorId: author.id, title: "by author", originKind: "proxy" },
+          author.id
+        );
+
+        const result = await repo.supersedeInterpretation(
+          interp.id,
+          "by superseder",
+          "revised",
+          undefined,
+          undefined,
+          superseder.id,
+          "direct"
+        );
+        if ("code" in result) throw new Error(`supersede failed: ${result.message}`);
+
+        // The replacement is a new position, authored by whoever superseded — its
+        // actor_id and origin_kind must agree, and both must name the superseder.
+        expect(result.replacement.actorId).toBe(superseder.id);
+        expect(result.replacement.originKind).toBe("direct");
+
+        // The original row is untouched: it keeps its own author.
+        expect(result.old.actorId).toBe(author.id);
       } finally {
         if (repo instanceof SqliteGovernanceRepository) repo.close();
       }

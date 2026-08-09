@@ -739,8 +739,11 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
 
     try {
       this.db.exec("BEGIN");
-      // The replacement row is emitted by the actor performing the supersession, not the
-      // original author — it carries replacementOriginKind, never current.originKind.
+      // The replacement row is authored by the actor performing the supersession, not the
+      // original author — it carries callerActorId and replacementOriginKind, never
+      // current.actorId or current.originKind. Attributing the replacement to the original
+      // author would violate the contract that records must never attribute work to an
+      // actor that did not author it.
       const result = this.db.prepare(
         `INSERT INTO interpretations
          (intent_id, domain_id, actor_id, title, scope_assumption, alignment, status, source_ref, origin_kind)
@@ -748,7 +751,7 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       ).run(
         current.intentId,
         current.domainId,
-        current.actorId,
+        callerActorId,
         newTitle,
         newScopeAssumption ?? null,
         newStatus ?? "clarifying",

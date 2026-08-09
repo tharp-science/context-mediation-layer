@@ -62,7 +62,7 @@ describe("no call site bypasses the resolver", () => {
         // Must also catch optional chaining (env?.CML_X), bracket access and quoted keys:
         // the first version of this guard matched only `env.CML_X` and let two live
         // bypasses through, one of which advertised a placeholder MCP URL on the host.
-        const hits = body.match(/(?:process\.env|\benv)\s*\??[.[]\s*"?CML_[A-Z0-9_]+/g) ?? [];
+        const hits = body.match(/(?:process\.env|\benv)\s*(?:\?\.)?\s*[.[]\s*['"`]?CML_[A-Z0-9_]+/g) ?? [];
         return hits.map((h) => `${f}: ${h}`);
       });
 

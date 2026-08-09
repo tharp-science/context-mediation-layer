@@ -84,3 +84,15 @@ describe("upstream protection under OAuth", () => {
     expect(() => assertUpstreamProtected(false, undefined, REMOTE)).not.toThrow();
   });
 });
+
+describe("the upstream guard is wired, not merely exported", () => {
+  // Exporting a guard that only tests call is weaker than leaving its helper
+  // orphaned: the orphan was the tell that caught this being dropped once. This
+  // asserts the call site itself, so removing it fails rather than passing quietly.
+  it("main() calls assertUpstreamProtected", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync("src/mcp/public-bridge.ts", "utf8");
+    const main = source.slice(source.indexOf("function main(): void {"));
+    expect(main).toContain("assertUpstreamProtected(");
+  });
+});

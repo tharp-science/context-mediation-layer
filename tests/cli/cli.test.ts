@@ -142,6 +142,187 @@ if (command === "create") {
     }
   });
 
+  it("cold start with a non-default scope names the first actor as the caller of its own registration event", () => {
+    const initDir = mkdtempSync(join(tmpdir(), "cml-init-scope-"));
+    const configPath = join(initDir, "cml.config.json");
+    try {
+      const initOutput = execFileSync(
+        "node",
+        ["dist/cli/index.js", "init", "--config", configPath, "--scope", "alpha"],
+        { cwd: process.cwd(), encoding: "utf8" }
+      );
+      const init = JSON.parse(initOutput);
+      expect(init.ok).toBe(true);
+      expect(init.data.scope).toBe("alpha");
+      // Reconciled from the 'default' placeholder used during the insert (there is no
+      // 'alpha' scope row yet at that point) to the actually-requested scope.
+      expect(init.data.actor.defaultScope).toBe("alpha");
+
+      // The first actor in a brand-new database has nothing else to name as the caller
+      // of its own "actor_registered" event, so the repository self-attributes it —
+      // resolved atomically to the actor's real id, not predicted ahead of the insert.
+      const eventsOutput = execFileSync(
+        "node",
+        ["dist/cli/index.js", "--config", configPath, "event", "list", "--entity-table", "actors"],
+        { cwd: process.cwd(), encoding: "utf8" }
+      );
+      const events = JSON.parse(eventsOutput);
+      expect(events.ok).toBe(true);
+      const registered = events.data.find(
+        (event: { eventType: string; entityId: number }) =>
+          event.eventType === "actor_registered" && event.entityId === init.data.actor.id
+      );
+      expect(registered).toBeDefined();
+      expect(registered.actorId).toBe(init.data.actor.id);
+    } finally {
+      rmSync(initDir, { recursive: true, force: true });
+    }
+  });
+
+  it("names an existing actor as the caller when init provisions an additional actor", () => {
+    const initDir = mkdtempSync(join(tmpdir(), "cml-init-existing-"));
+    const configPath = join(initDir, "cml.config.json");
+    try {
+      const firstOutput = execFileSync("node", ["dist/cli/index.js", "init", "--config", configPath], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+      const first = JSON.parse(firstOutput);
+      expect(first.ok).toBe(true);
+      expect(first.data.actor.name).toBe("local-operator");
+
+      // Same db (same config), different --actor: the actors table is no longer empty,
+      // so this actor is provisioned by the pre-existing one, not self-attributed.
+      const secondOutput = execFileSync(
+        "node",
+        ["dist/cli/index.js", "init", "--config", configPath, "--actor", "second-agent", "--provider", "test"],
+        { cwd: process.cwd(), encoding: "utf8" }
+      );
+      const second = JSON.parse(secondOutput);
+      expect(second.ok).toBe(true);
+      expect(second.data.actor.name).toBe("second-agent");
+      expect(second.data.actor.id).not.toBe(first.data.actor.id);
+
+      const eventsOutput = execFileSync(
+        "node",
+        ["dist/cli/index.js", "--config", configPath, "event", "list", "--entity-table", "actors"],
+        { cwd: process.cwd(), encoding: "utf8" }
+      );
+      const events = JSON.parse(eventsOutput);
+      const registered = events.data.find(
+        (event: { eventType: string; entityId: number }) =>
+          event.eventType === "actor_registered" && event.entityId === second.data.actor.id
+      );
+      expect(registered).toBeDefined();
+      expect(registered.actorId).toBe(first.data.actor.id);
+    } finally {
+      rmSync(initDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mutate a pre-existing actor's defaultScope as a side effect of a later init with a different scope", () => {
+    const initDir = mkdtempSync(join(tmpdir(), "cml-init-reconcile-"));
+    const configPath = join(initDir, "cml.config.json");
+    try {
+      const firstOutput = execFileSync(
+        "node",
+        ["dist/cli/index.js", "init", "--config", configPath, "--scope", "alpha"],
+        { cwd: process.cwd(), encoding: "utf8" }
+      );
+      const first = JSON.parse(firstOutput);
+      expect(first.ok).toBe(true);
+      expect(first.data.actor.defaultScope).toBe("alpha");
+
+      // Re-running init against the same actor with a different scope must register the
+      // new scope, but must not flip the pre-existing actor's defaultScope out from
+      // under it — that reconciliation only ever applies to an actor created by *this*
+      // init call with the 'default' placeholder scope.
+      const secondOutput = execFileSync(
+        "node",
+        ["dist/cli/index.js", "init", "--config", configPath, "--scope", "beta", "--force"],
+        { cwd: process.cwd(), encoding: "utf8" }
+      );
+      const second = JSON.parse(secondOutput);
+      expect(second.ok).toBe(true);
+      expect(second.data.scope).toBe("beta");
+      expect(second.data.actor.id).toBe(first.data.actor.id);
+      expect(second.data.actor.defaultScope).toBe("alpha");
+
+      const scopesOutput = execFileSync(
+        "node",
+        ["dist/cli/index.js", "--config", configPath, "scope", "list"],
+        { cwd: process.cwd(), encoding: "utf8" }
+      );
+      const scopes = JSON.parse(scopesOutput);
+      expect(scopes.data).toContain("beta");
+
+      // A direct read confirms it's not just this response's actor snapshot that's
+      // stale — the stored row itself was never touched.
+      const statusOutput = execFileSync("node", ["dist/cli/index.js", "--config", configPath, "status"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+      const status = JSON.parse(statusOutput);
+      expect(status.data.actor.defaultScope).toBe("alpha");
+    } finally {
+      rmSync(initDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers correctly (not silently) when the first actor is re-created after deletion advances the id sequence", () => {
+    const initDir = mkdtempSync(join(tmpdir(), "cml-init-drift-"));
+    const configPath = join(initDir, "cml.config.json");
+    try {
+      const firstOutput = execFileSync("node", ["dist/cli/index.js", "init", "--config", configPath], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+      const first = JSON.parse(firstOutput);
+      expect(first.ok).toBe(true);
+
+      // Simulate an operator deleting the actor out from under the ledger (manual
+      // cleanup, a botched migration, ...): the actors table is empty again, but
+      // SQLite's AUTOINCREMENT sequence for `actors` has already advanced past
+      // first.data.actor.id, so the next insert will not reuse it. Foreign keys are
+      // disabled only around this direct manipulation, since init's bootstrap also
+      // leaves the deleted actor referenced from contracts/roles/bindings rows that
+      // are irrelevant to what this test exercises.
+      const dbPath = first.data.database.path;
+      const raw = new DatabaseSync(dbPath);
+      raw.exec("PRAGMA foreign_keys = OFF");
+      raw.prepare("DELETE FROM events WHERE actor_id = ?").run(first.data.actor.id);
+      raw.prepare("DELETE FROM actors WHERE id = ?").run(first.data.actor.id);
+      raw.close();
+
+      // Re-running init sees an empty actors table and treats this as a cold start
+      // again. It must not predict the new actor will reuse the deleted id — it
+      // self-attributes to whatever id the insert actually receives — so this succeeds
+      // cleanly on the first try, with no orphaned, unattributed actor row.
+      const secondOutput = execFileSync("node", ["dist/cli/index.js", "init", "--config", configPath], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+      const second = JSON.parse(secondOutput);
+      expect(second.ok).toBe(true);
+      expect(second.data.actor.id).not.toBe(first.data.actor.id);
+
+      const eventsOutput = execFileSync(
+        "node",
+        ["dist/cli/index.js", "--config", configPath, "event", "list", "--entity-table", "actors"],
+        { cwd: process.cwd(), encoding: "utf8" }
+      );
+      const events = JSON.parse(eventsOutput);
+      const registered = events.data.find(
+        (event: { eventType: string; entityId: number }) =>
+          event.eventType === "actor_registered" && event.entityId === second.data.actor.id
+      );
+      expect(registered).toBeDefined();
+      expect(registered.actorId).toBe(second.data.actor.id);
+    } finally {
+      rmSync(initDir, { recursive: true, force: true });
+    }
+  });
+
   it("generates transparent MCP setup snippets", () => {
     const outPath = join(tempDir, "mcp.stdio.json");
     const output = execFileSync("node", ["dist/cli/index.js", "setup", "mcp", "--transport", "stdio", "--out", outPath], {

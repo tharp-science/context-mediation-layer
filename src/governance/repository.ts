@@ -195,7 +195,13 @@ export interface GovernanceRepository {
   ): Promise<{ old: Contract; replacement: Contract } | RepositoryError>;
 
   // Actors
-  registerActor(actor: ActorCreate, callerActorId: ActorId): Promise<Actor>;
+  //
+  // callerActorId accepts the sentinel "self" for the one case where no other actor
+  // can truthfully be named as the cause of an actor's own registration: the first
+  // actor in a brand-new database. Implementations must resolve "self" to the new
+  // actor's own real, post-insert id and do so atomically with the insert — see
+  // SqliteGovernanceRepository.registerActor for the canonical implementation.
+  registerActor(actor: ActorCreate, callerActorId: ActorId | "self"): Promise<Actor>;
   updateActor(
     id: ActorId,
     updates: Partial<Omit<Actor, "id" | "createdAt">>,
@@ -774,7 +780,7 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   // Actors
   // ============================================================
 
-  async registerActor(actor: ActorCreate, callerActorId: ActorId): Promise<Actor> {
+  async registerActor(actor: ActorCreate, callerActorId: ActorId | "self"): Promise<Actor> {
     const now = new Date();
     const id = actorId(this.nextActorId++);
     const record: Actor = {
@@ -785,10 +791,19 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       updatedAt: now,
     };
     this.actors.set(id, record);
-    await this.emitEvent("actor_registered", "actors", id, callerActorId, {
-      scope: record.defaultScope,
-      snapshot: { ...record } as unknown as Record<string, unknown>,
-    });
+    // No FK exists in this implementation, so emitEvent cannot fail today the way
+    // SQLite's can — but the rollback-on-failure here keeps failure semantics identical
+    // to SqliteGovernanceRepository.registerActor (insert and event land or fail
+    // together) rather than relying on that being coincidentally true.
+    try {
+      await this.emitEvent("actor_registered", "actors", id, callerActorId === "self" ? id : callerActorId, {
+        scope: record.defaultScope,
+        snapshot: { ...record } as unknown as Record<string, unknown>,
+      });
+    } catch (error) {
+      this.actors.delete(id);
+      throw error;
+    }
     return record;
   }
 

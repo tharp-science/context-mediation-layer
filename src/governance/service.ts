@@ -762,7 +762,11 @@ export class GovernanceService {
     contextRef?: string;
     contextPolicy?: string;
     description?: string;
-    callerActorId: number;
+    // "self" is the sentinel for the one legitimate case where no other actor can be
+    // named as the cause of an actor's own registration: the first actor in a brand-new
+    // database. The repository resolves it to the new actor's own real id, atomically
+    // with the insert — see SqliteGovernanceRepository.registerActor.
+    callerActorId: number | "self";
   }): Promise<ServiceResponse<Actor>> {
     if (params.contractKey != null) {
       const contractError = await this.requireActiveContractKey(params.contractKey);
@@ -788,7 +792,7 @@ export class GovernanceService {
       contextRef: params.contextRef,
       contextPolicy: params.contextPolicy,
       description: params.description,
-    }, toActorId(params.callerActorId));
+    }, params.callerActorId === "self" ? "self" : toActorId(params.callerActorId));
     return success(actor);
   }
 

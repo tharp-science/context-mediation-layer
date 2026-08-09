@@ -830,3 +830,87 @@ describe("Scope registration lockstep", () => {
     }
   });
 });
+
+// ============================================================
+// Bootstrap atomicity (Task 5 review, Finding 1): registerActor's insert and its
+// "actor_registered" event must land or fail together. Before this fix, the CLI
+// predicted the new actor's id ahead of the insert and asserted the prediction; if the
+// prediction was wrong (e.g. actors were deleted while SQLite's AUTOINCREMENT sequence
+// had already advanced), the actor insert committed as an unwrapped statement, the
+// event insert then failed the events.actor_id FK, and the caller saw an error — but
+// the actor row was already there, permanently unattributed. registerActor now accepts
+// the sentinel "self" and resolves it to the real post-insert id inside one
+// BEGIN/COMMIT, so a failure rolls back the actor row too. The in-memory repository has
+// no FK and cannot reproduce the failure, so this exercises SqliteGovernanceRepository
+// directly.
+// ============================================================
+
+describe("Actor registration atomicity", () => {
+  it("rolls back the actor row when its registration event cannot be attributed (stale predicted caller id)", async () => {
+    const repo = new SqliteGovernanceRepository(":memory:");
+    try {
+      // Seed one actor — the first in a fresh db, so actorId(1) is a correct
+      // self-attribution (matching the pre-fix CLI's own predict-and-assert bootstrap) —
+      // then delete it. This advances SQLite's AUTOINCREMENT sequence for `actors` past 1
+      // while leaving the table empty, reproducing "actors rows were removed while
+      // sqlite_sequence had advanced".
+      const seed = await repo.registerActor(
+        { name: "seed-actor", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+        actorId(1)
+      );
+      const db = (repo as unknown as { db: import("node:sqlite").DatabaseSync }).db;
+      db.prepare("DELETE FROM events WHERE actor_id = ?").run(seed.id);
+      db.prepare("DELETE FROM actors WHERE id = ?").run(seed.id);
+      expect((db.prepare("SELECT COUNT(*) AS n FROM actors").get() as { n: number }).n).toBe(0);
+
+      // Simulate the old CLI's predict-and-assert bootstrap: hand a hard-coded caller id
+      // of 1 (what a "first actor" prediction would produce) instead of "self". Because
+      // the sequence has advanced past 1, the new actor will not get id 1, so naming 1 as
+      // the event's caller violates the events.actor_id FK.
+      await expect(
+        repo.registerActor(
+          { name: "predicted-actor", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(1)
+        )
+      ).rejects.toThrow();
+
+      // The actor row must not survive the failed, unattributable registration. This is
+      // the assertion that fails against the pre-fix two-unwrapped-statements
+      // implementation (the actor insert commits even though the overall call throws)
+      // and passes once the insert and its event are wrapped in one transaction.
+      const survivors = await repo.listActors();
+      expect(survivors.find((a) => a.name === "predicted-actor")).toBeUndefined();
+      expect((db.prepare("SELECT COUNT(*) AS n FROM actors").get() as { n: number }).n).toBe(0);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it("resolves 'self' to the actor's real post-insert id even when the sequence has drifted", async () => {
+    const repo = new SqliteGovernanceRepository(":memory:");
+    try {
+      const seed = await repo.registerActor(
+        { name: "seed-actor-2", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+        "self"
+      );
+      const db = (repo as unknown as { db: import("node:sqlite").DatabaseSync }).db;
+      db.prepare("DELETE FROM events WHERE actor_id = ?").run(seed.id);
+      db.prepare("DELETE FROM actors WHERE id = ?").run(seed.id);
+
+      // "self" makes no prediction — it names whatever id the insert actually receives,
+      // which after the deletion above will not be 1.
+      const actor = await repo.registerActor(
+        { name: "drifted-actor", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+        "self"
+      );
+      expect(actor.id).not.toBe(1);
+
+      const events = await repo.listEvents({ entityTable: "actors" });
+      const registered = events.find((e) => e.eventType === "actor_registered" && e.entityId === actor.id);
+      expect(registered).toBeDefined();
+      expect(registered?.actorId).toBe(actor.id);
+    } finally {
+      repo.close();
+    }
+  });
+});

@@ -1108,35 +1108,52 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     }
   }
 
-  async registerActor(actor: ActorCreate, callerActorId: ActorId): Promise<Actor> {
-    const result = this.db.prepare(
-      `INSERT INTO actors
-       (name, role, provider, actor_type, capability_namespace, session_id, default_scope, status,
-        contract_key, default_contract_key, contract_ref, context_ref, context_policy, description)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      actor.name,
-      actor.role,
-      actor.provider,
-      actor.actorType ?? null,
-      actor.capabilityNamespace,
-      actor.sessionId ?? null,
-      actor.defaultScope,
-      actor.status ?? "active",
-      actor.contractKey ?? null,
-      actor.defaultContractKey ?? null,
-      actor.contractRef ?? null,
-      actor.contextRef ?? null,
-      actor.contextPolicy ?? null,
-      actor.description ?? null
-    );
-    const created = await this.getActor(actorId(Number(result.lastInsertRowid)));
-    if (!created) throw new Error("Inserted actor could not be read back");
-    await this.emitEvent("actor_registered", "actors", created.id, callerActorId, {
-      scope: created.defaultScope,
-      snapshot: created as unknown as Record<string, unknown>,
-    });
-    return created;
+  async registerActor(actor: ActorCreate, callerActorId: ActorId | "self"): Promise<Actor> {
+    // Insert and self-attribution resolution happen in one transaction: the caller
+    // parameter accepts the sentinel "self" for the one case where no other actor can
+    // truthfully be named as the cause of an actor's own registration (the first actor
+    // in a brand-new database). Predicting that id ahead of the insert and asserting the
+    // prediction (the previous approach, formerly done by the CLI) left a window between
+    // a committed actor row and its event where a crash or FK failure could leave an
+    // actor with zero events, permanently and silently. Resolving the real id from the
+    // insert's own result — inside BEGIN/COMMIT, matching supersedeContract's idiom —
+    // removes both the prediction and the window: either both rows land, or neither does.
+    try {
+      this.db.exec("BEGIN");
+      const result = this.db.prepare(
+        `INSERT INTO actors
+         (name, role, provider, actor_type, capability_namespace, session_id, default_scope, status,
+          contract_key, default_contract_key, contract_ref, context_ref, context_policy, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        actor.name,
+        actor.role,
+        actor.provider,
+        actor.actorType ?? null,
+        actor.capabilityNamespace,
+        actor.sessionId ?? null,
+        actor.defaultScope,
+        actor.status ?? "active",
+        actor.contractKey ?? null,
+        actor.defaultContractKey ?? null,
+        actor.contractRef ?? null,
+        actor.contextRef ?? null,
+        actor.contextPolicy ?? null,
+        actor.description ?? null
+      );
+      const created = await this.getActor(actorId(Number(result.lastInsertRowid)));
+      if (!created) throw new Error("Inserted actor could not be read back");
+      const resolvedCallerId = callerActorId === "self" ? created.id : callerActorId;
+      await this.emitEvent("actor_registered", "actors", created.id, resolvedCallerId, {
+        scope: created.defaultScope,
+        snapshot: created as unknown as Record<string, unknown>,
+      });
+      this.db.exec("COMMIT");
+      return created;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   async updateActor(

@@ -50,23 +50,26 @@ Measured against the canonical store and the working tree on 2026-08-09.
 
 Each ships independently and leaves the system working.
 
-### A — identity and authorship
+### A — identity and origin
 
 Explicit `callerActorId` on all 23 write methods; the three ambiguous ones rename their
 existing parameter to `subjectActorId`. Service writes consume the caller identity the
 bridge already resolves (`mapOAuthActor`, `src/mcp/public-bridge.ts:604`) rather than a
 per-process default.
 
-One new column: `authorship`, `direct` or `proxy`, on `intents`, `interpretations`,
-`actions` and `reports`. It answers *who emitted this*. **Mandate needs no new column** —
-`interpretations.intent_id` and `actions.intent_id` are already NOT NULL, so which
-intent authorises a record has always been recorded. A proxy-authored action under a
-direct-authored intent is therefore already expressible; it just needs the one field
-to say so.
+One new column: `origin_kind`, `direct` or `proxy`, on `intents`, `interpretations`,
+`actions` and `reports`. It answers *who emitted this*, and nothing else — it is
+deliberately not named `provenance`, which in revision 1 meant origin and mandate
+together.
 
-`authorship` is derived from transport in this phase: a write arriving through the
+Interpretations and actions already carry a mandating intent; reports either require
+one in this phase or remain explicitly unmandated. A proxy-emitted action under a
+direct-emitted intent is therefore already expressible; it just needs the one field to
+say so.
+
+`origin_kind` is derived from transport in this phase: a write arriving through the
 operator's own CLI session is `direct`, anything else is `proxy`. That is assertable
-rather than proven, and the map labels it as such. A signing key upgrades it later
+rather than proven, and the page labels it as such. A signing key upgrades it later
 without changing any read path.
 
 *Delivers:* every record says truthfully who made it, and agent-authored intents stop
@@ -95,9 +98,11 @@ complaint is resolved for CLI work.
 and so do the chains between them — `actors.contract_key`, `actors.actor_type`,
 `roles.contract_key`, `contracts.parent_key`. Rendering them is a read.
 
-One page. `/architecture` shows structure and authority as two readings of the same
-data — hierarchy for what exists, a matrix for who relates to what — with no nav choice
-on arrival. Edits happen where you are looking. A session-intent selector sits at the
+One page. `/architecture` shows two readings of the same data — a hierarchy for what
+exists, and **contract reach and classification** for how actors and roles attach to
+it — with no nav choice on arrival. It is deliberately not called an authority matrix
+until Phase D adds operation-level grants; before that it shows which contracts an
+actor reaches, not what it may do, and the label should not overclaim. Edits happen where you are looking. A session-intent selector sits at the
 top; every change emits a governance event and logs an action against that intent, so
 the filing obligation is set once rather than per change.
 
@@ -136,7 +141,7 @@ This phase adds per-permission detail to a page that is already useful without i
 
 | Change | Phase | Note |
 | --- | --- | --- |
-| `authorship` | A | `direct` / `proxy`, default `proxy` |
+| `origin_kind` | A | `direct` / `proxy`, default `proxy` |
 | `status` on `scopes`, `domains` | B | additive, existing helper |
 | `contract_grants` | D | `(contract_id, permission)` |
 | `role_scopes` | D | `(role_id, scope)` |
@@ -163,9 +168,14 @@ grants rather than being unable to find them, that design is ready.
 **Descriptive authority is ignorable.** Nothing stops an actor acting outside its
 grants. That is the deliberate trade.
 
-**Transport-derived authorship is assertable, not proven** — anything with shell access
-on the operator's machine can present as `direct`. It closes the invisible case, not the
-determined one. Labelled as such wherever it is displayed.
+**Transport-derived `origin_kind` is assertable, not proven** — anything with shell
+access on the operator's machine can present as `direct`. It closes the invisible case,
+not the determined one. Labelled as such wherever it is displayed.
+
+**One open item in Phase A:** whether `reports` require a mandating intent or may be
+explicitly unmandated. `reports.intent_id` is currently nullable, so both are
+reachable; the choice is between tightening it and recording "unmandated" as a
+deliberate state rather than a silent null.
 
 **Unclassified is a large set on day one** — 13 actors and at least one role. Visible
 rather than blocking, so it can be worked down at leisure.

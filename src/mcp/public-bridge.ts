@@ -27,14 +27,29 @@ interface PublicBridgeOptions {
   writableExactPaths?: Set<string>;
   writablePathPrefixes?: string[];
   writablePathSuffixes?: string[];
+  allowWritableSuffixPaths?: boolean;
   allowAllWritablePaths?: boolean;
   assumedRole?: string;
   invokedSkillRef?: string;
   policyRef?: string;
   governingContractKey?: string;
   allowClientInvocationContext?: boolean;
+  actorProfiles?: Map<string, PublicBridgeProfile>;
   maxBodyBytes?: number;
   oauth?: OAuthOptions;
+}
+
+interface PublicBridgeProfile {
+  writableExactPaths?: Set<string>;
+  writablePathPrefixes?: string[];
+  writablePathSuffixes?: string[];
+  allowWritableSuffixPaths?: boolean;
+  allowAllWritablePaths?: boolean;
+  assumedRole?: string;
+  invokedSkillRef?: string;
+  policyRef?: string;
+  governingContractKey?: string;
+  requireInterpretationForVaultMutations?: boolean;
 }
 
 interface OAuthOptions {
@@ -123,6 +138,8 @@ interface PilotAuthorizationCode {
 }
 
 const DEFAULT_ALLOWED_TOOLS = [
+  "search",
+  "fetch",
   "ui_manifest",
   "ui_runtime_get",
   "operator_state_get",
@@ -144,6 +161,8 @@ const DEFAULT_ALLOWED_TOOLS = [
   "actor_type_get",
   "actor_type_list",
   "vault_read",
+  "vault_find",
+  "vault_resolve",
   "vault_search",
 ];
 
@@ -248,7 +267,8 @@ function authorizeAndNormalizeMessage(
   if (actorResult.blocked) {
     return { message, blocked: toolPolicyError(message, actorResult.blocked.code, actorResult.blocked.message) };
   }
-  const pathResult = validateWritablePath(name, actorResult.args, options);
+  const profile = actorProfile(authenticatedActor ?? options.requiredActor, options);
+  const pathResult = validateWritablePath(name, actorResult.args, options, profile);
   if (pathResult) {
     return { message, blocked: toolPolicyError(message, pathResult.code, pathResult.message) };
   }
@@ -257,20 +277,32 @@ function authorizeAndNormalizeMessage(
       ...message,
       params: {
         ...params,
-        arguments: applyInvocationContext(actorResult.args, options),
+        arguments: applyInvocationContext(actorResult.args, options, profile),
       },
     },
   };
 }
 
-function applyInvocationContext(args: Record<string, unknown>, options: PublicBridgeOptions): Record<string, unknown> {
+function actorProfile(actor: string | undefined, options: PublicBridgeOptions): PublicBridgeProfile | undefined {
+  return actor ? options.actorProfiles?.get(actor) : undefined;
+}
+
+function applyInvocationContext(
+  args: Record<string, unknown>,
+  options: PublicBridgeOptions,
+  profile?: PublicBridgeProfile
+): Record<string, unknown> {
   const baseArgs = options.allowClientInvocationContext ? args : stripClientInvocationContext(args);
+  const assumedRole = profile?.assumedRole ?? options.assumedRole;
+  const invokedSkillRef = profile?.invokedSkillRef ?? options.invokedSkillRef;
+  const policyRef = profile?.policyRef ?? options.policyRef;
+  const governingContractKey = profile?.governingContractKey ?? options.governingContractKey;
   return {
     ...baseArgs,
-    ...(options.assumedRole ? { assumedRole: options.assumedRole } : {}),
-    ...(options.invokedSkillRef ? { invokedSkillRef: options.invokedSkillRef } : {}),
-    ...(options.policyRef ? { policyRef: options.policyRef } : {}),
-    ...(options.governingContractKey ? { governingContractKey: options.governingContractKey } : {}),
+    ...(assumedRole ? { assumedRole } : {}),
+    ...(invokedSkillRef ? { invokedSkillRef } : {}),
+    ...(policyRef ? { policyRef } : {}),
+    ...(governingContractKey ? { governingContractKey } : {}),
   };
 }
 
@@ -300,13 +332,20 @@ function applyRequiredActor(
 function validateWritablePath(
   name: string,
   args: Record<string, unknown>,
-  options: PublicBridgeOptions
+  options: PublicBridgeOptions,
+  profile?: PublicBridgeProfile
 ): { code: string; message: string } | undefined {
   if (!VAULT_MUTATION_TOOLS.has(name)) return undefined;
   if (!Number.isInteger(args.intent)) {
     return {
       code: "INTENT_REQUIRED",
       message: `Tool '${name}' requires an integer intent mandate.`,
+    };
+  }
+  if (profile?.requireInterpretationForVaultMutations && !Number.isInteger(args.interpretationId)) {
+    return {
+      code: "INTERPRETATION_REQUIRED",
+      message: `Tool '${name}' requires an integer interpretationId under this CML bridge profile.`,
     };
   }
   const path = typeof args.path === "string" ? normalizeVaultPath(args.path) : undefined;
@@ -316,7 +355,7 @@ function validateWritablePath(
       message: `Tool '${name}' requires a vault-relative path.`,
     };
   }
-  if (!isWritablePath(path, options)) {
+  if (!isWritablePath(path, options, profile)) {
     return {
       code: "PATH_NOT_PERMITTED",
       message: `Path '${path}' is not writable through this public CML bridge.`,
@@ -324,7 +363,7 @@ function validateWritablePath(
   }
   if (name === "vault_move") {
     const destination = typeof args.to === "string" ? normalizeVaultPath(args.to) : undefined;
-    if (!destination || !isWritablePath(destination, options)) {
+    if (!destination || !isWritablePath(destination, options, profile)) {
       return {
         code: "PATH_NOT_PERMITTED",
         message: "Move destination is not writable through this public CML bridge.",
@@ -334,14 +373,15 @@ function validateWritablePath(
   return undefined;
 }
 
-function isWritablePath(path: string, options: PublicBridgeOptions): boolean {
-  if (options.allowAllWritablePaths) return true;
-  const exactPaths = options.writableExactPaths ?? new Set<string>();
-  const prefixes = options.writablePathPrefixes ?? [];
-  const suffixes = options.writablePathSuffixes ?? [];
+function isWritablePath(path: string, options: PublicBridgeOptions, profile?: PublicBridgeProfile): boolean {
+  if (profile?.allowAllWritablePaths ?? options.allowAllWritablePaths) return true;
+  const exactPaths = profile?.writableExactPaths ?? options.writableExactPaths ?? new Set<string>();
+  const prefixes = profile?.writablePathPrefixes ?? options.writablePathPrefixes ?? [];
+  const suffixes = profile?.writablePathSuffixes ?? options.writablePathSuffixes ?? [];
   const exact = exactPaths.has(path);
   const prefixed = prefixes.some((prefix) => path.startsWith(prefix));
   const suffixed = suffixes.length === 0 || suffixes.some((suffix) => path.endsWith(suffix));
+  if ((profile?.allowWritableSuffixPaths ?? options.allowWritableSuffixPaths) && suffixes.length > 0 && suffixed) return true;
   return (exact || prefixed) && suffixed;
 }
 
@@ -442,7 +482,6 @@ function protectedResourceMetadata(request: IncomingMessage, options: OAuthOptio
     bearer_methods_supported: ["header"],
     scopes_supported: options.scopesSupported ?? DEFAULT_OAUTH_SCOPES,
     resource_name: "CML Public MCP",
-    ...(options.pilotIssuer ? { service_documentation: "CML pilot OAuth issuer; replace with production identity for non-pilot deployments." } : {}),
   };
 }
 
@@ -675,8 +714,8 @@ function authorizationServerMetadata(options: OAuthOptions): Record<string, unkn
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["client_secret_basic", "client_secret_post", "none"],
     scopes_supported: scopes,
-    resource_indicators_supported: true,
     ...(options.pilotIssuer ? { service_documentation: "CML pilot OAuth issuer; replace with production identity for non-pilot deployments." } : {}),
+    resource_indicators_supported: true,
   };
 }
 
@@ -1176,6 +1215,26 @@ function parseKeyValueMap(value: string | undefined): Map<string, string> | unde
   return new Map(entries);
 }
 
+function actorProfilesFromEnv(): Map<string, PublicBridgeProfile> | undefined {
+  const profiles = new Map<string, PublicBridgeProfile>();
+  const principalAdvisorActor = firstEnv("CML_PUBLIC_MCP_PA_ACTOR");
+  if (principalAdvisorActor) {
+    profiles.set(principalAdvisorActor, {
+      writableExactPaths: new Set(parseCsv(firstEnv("CML_PUBLIC_MCP_PA_WRITABLE_EXACT_PATHS"))),
+      writablePathPrefixes: parseCsv(firstEnv("CML_PUBLIC_MCP_PA_WRITABLE_PATH_PREFIXES")),
+      writablePathSuffixes: parseCsv(firstEnv("CML_PUBLIC_MCP_PA_WRITABLE_PATH_SUFFIXES")),
+      allowWritableSuffixPaths: firstEnv("CML_PUBLIC_MCP_PA_ALLOW_WRITABLE_SUFFIX_PATHS") === "1",
+      allowAllWritablePaths: firstEnv("CML_PUBLIC_MCP_PA_ALLOW_ALL_WRITABLE_PATHS") === "1",
+      assumedRole: firstEnv("CML_PUBLIC_MCP_PA_ASSUMED_ROLE"),
+      invokedSkillRef: firstEnv("CML_PUBLIC_MCP_PA_INVOKED_SKILL_REF"),
+      policyRef: firstEnv("CML_PUBLIC_MCP_PA_POLICY_REF"),
+      governingContractKey: firstEnv("CML_PUBLIC_MCP_PA_GOVERNING_CONTRACT_KEY"),
+      requireInterpretationForVaultMutations: firstEnv("CML_PUBLIC_MCP_PA_REQUIRE_INTERPRETATION_FOR_VAULT_MUTATIONS") === "1",
+    });
+  }
+  return profiles.size > 0 ? profiles : undefined;
+}
+
 function oauthOptionsFromEnv(publicBaseUrl?: string): OAuthOptions | undefined {
   const pilotEnabled = firstEnv("CML_OAUTH_PILOT_ISSUER") === "1";
   const issuer = firstEnv("CML_OAUTH_ISSUER") ?? (pilotEnabled ? publicBaseUrl : undefined);
@@ -1234,20 +1293,15 @@ function main(): void {
   const oauth = oauthOptionsFromEnv(publicBaseUrl);
   const publicToken = firstEnv("CML_PUBLIC_MCP_TOKEN");
   const allowInsecure = firstEnv("CML_PUBLIC_MCP_ALLOW_INSECURE") === "1";
-  const upstreamUrl = firstEnv("CML_PUBLIC_MCP_UPSTREAM_URL") ?? "http://127.0.0.1:8787/mcp";
-  const upstreamToken = firstEnv("CML_PUBLIC_MCP_UPSTREAM_TOKEN");
   if (oauth && allowInsecure) {
     throw new Error("CML_PUBLIC_MCP_ALLOW_INSECURE must not be set when OAuth is enabled");
-  }
-  if (oauth && !upstreamToken && !isLocalHttpUrl(upstreamUrl)) {
-    throw new Error("CML_PUBLIC_MCP_UPSTREAM_TOKEN is required when OAuth protects a non-local upstream MCP server");
   }
   if (!oauth && !publicToken && !allowInsecure) {
     throw new Error("Set CML_PUBLIC_MCP_TOKEN, CML_OAUTH_ISSUER, or CML_OAUTH_PILOT_ISSUER=1 before starting cml-mcp-public");
   }
   const server = createCmlPublicMcpBridge({
-    upstreamUrl,
-    upstreamToken,
+    upstreamUrl: firstEnv("CML_PUBLIC_MCP_UPSTREAM_URL") ?? "http://127.0.0.1:8787/mcp",
+    upstreamToken: firstEnv("CML_PUBLIC_MCP_UPSTREAM_TOKEN"),
     publicToken,
     allowInsecure,
     allowedTools: new Set(parseCsv(firstEnv("CML_PUBLIC_MCP_ALLOWED_TOOLS"), DEFAULT_ALLOWED_TOOLS)),
@@ -1256,11 +1310,13 @@ function main(): void {
     writableExactPaths: new Set(parseCsv(firstEnv("CML_PUBLIC_MCP_WRITABLE_EXACT_PATHS"))),
     writablePathPrefixes: parseCsv(firstEnv("CML_PUBLIC_MCP_WRITABLE_PATH_PREFIXES")),
     writablePathSuffixes: parseCsv(firstEnv("CML_PUBLIC_MCP_WRITABLE_PATH_SUFFIXES")),
+    allowWritableSuffixPaths: firstEnv("CML_PUBLIC_MCP_ALLOW_WRITABLE_SUFFIX_PATHS") === "1",
     allowAllWritablePaths: firstEnv("CML_PUBLIC_MCP_ALLOW_ALL_WRITABLE_PATHS") === "1",
     assumedRole: firstEnv("CML_PUBLIC_MCP_ASSUMED_ROLE"),
     invokedSkillRef: firstEnv("CML_PUBLIC_MCP_INVOKED_SKILL_REF"),
     policyRef: firstEnv("CML_PUBLIC_MCP_POLICY_REF"),
     governingContractKey: firstEnv("CML_PUBLIC_MCP_GOVERNING_CONTRACT_KEY"),
+    actorProfiles: actorProfilesFromEnv(),
     oauth,
   });
   server.listen(port, host, () => {

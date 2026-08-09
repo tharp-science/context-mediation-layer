@@ -19,7 +19,7 @@ import {
   OriginKind,
 } from "../governance/domain.js";
 import { inspectIntent, inspectInterpretation } from "../orchestration/inspect.js";
-import { ObsidianVaultService } from "../vault/obsidian-vault-service.js";
+import { ObsidianVaultService, VaultCommandResult, VaultMutationManifest } from "../vault/obsidian-vault-service.js";
 import { envValue } from "../config/env.js";
 
 interface CliContext {
@@ -323,14 +323,36 @@ function vaultService(flags: Flags, config: ConfigBundle): ObsidianVaultService 
 
 async function logVaultMutation(
   ctx: CliContext,
-  params: { intentId: number; operation: string; path?: string; destination?: string; outcome?: string }
+  params: { intentId: number; operation: string; path?: string; destination?: string; result: VaultCommandResult }
 ): Promise<ServiceResponse<unknown>> {
   return ctx.service.logAction({
     intentId: params.intentId,
     callerActorId: ctx.actor.id,
     description: `Vault ${params.operation}: ${params.path ?? "(no path)"}${params.destination ? ` -> ${params.destination}` : ""}`,
-    outcome: params.outcome,
+    outcome: renderVaultManifest(params.result.manifest ?? fallbackVaultManifest(params.operation, params.path, params.result, params.destination)),
   });
+}
+
+function renderVaultManifest(manifest: VaultMutationManifest): string {
+  return JSON.stringify({ manifest }, null, 2);
+}
+
+function fallbackVaultManifest(
+  operation: string,
+  path: string | undefined,
+  result: VaultCommandResult,
+  destination?: string
+): VaultMutationManifest {
+  return {
+    files: [
+      {
+        path: result.path ?? path ?? "(no path)",
+        change: result.data === "created" ? "created" : operation === "delete" ? "deleted" : operation === "move" ? "moved" : "changed",
+        operation,
+        ...(destination ? { destination } : {}),
+      },
+    ],
+  };
 }
 
 async function requireIntentForVaultMutation(ctx: CliContext, intentId: number): Promise<void> {
@@ -1194,12 +1216,23 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         meta: { schema_version: 2 },
       };
     }
+    if (op === "find" || op === "resolve") {
+      return {
+        ok: true,
+        data: await vault.find(requiredFlag(flags, "query"), {
+          path: flag(flags, "path"),
+          limit: intFlag(flags, "limit"),
+          format: enumFlag(flags, "format", VAULT_SEARCH_FORMATS),
+        }),
+        meta: { schema_version: 2 },
+      };
+    }
     if (op === "write") {
       const intentId = requiredIntFlag(flags, "intent");
       const path = requiredFlag(flags, "path");
       await requireIntentForVaultMutation(ctx, intentId);
       const result = await vault.write(path, requiredFlag(flags, "content"));
-      const action = await logVaultMutation(ctx, { intentId, operation: "write", path: result.path, outcome: result.data });
+      const action = await logVaultMutation(ctx, { intentId, operation: "write", path: result.path, result });
       return { ok: true, data: { vault: result, action: action.ok ? action.data : action }, meta: { schema_version: 2 } };
     }
     if (op === "append") {
@@ -1207,7 +1240,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
       const path = requiredFlag(flags, "path");
       await requireIntentForVaultMutation(ctx, intentId);
       const result = await vault.append(path, requiredFlag(flags, "content"));
-      const action = await logVaultMutation(ctx, { intentId, operation: "append", path: result.path, outcome: result.data });
+      const action = await logVaultMutation(ctx, { intentId, operation: "append", path: result.path, result });
       return { ok: true, data: { vault: result, action: action.ok ? action.data : action }, meta: { schema_version: 2 } };
     }
     if (op === "move") {
@@ -1221,7 +1254,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         operation: "move",
         path,
         destination: result.path,
-        outcome: result.data,
+        result,
       });
       return { ok: true, data: { vault: result, action: action.ok ? action.data : action }, meta: { schema_version: 2 } };
     }
@@ -1231,7 +1264,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
       const path = requiredFlag(flags, "path");
       await requireIntentForVaultMutation(ctx, intentId);
       const result = await vault.delete(path);
-      const action = await logVaultMutation(ctx, { intentId, operation: "delete", path: result.path, outcome: result.data });
+      const action = await logVaultMutation(ctx, { intentId, operation: "delete", path: result.path, result });
       return { ok: true, data: { vault: result, action: action.ok ? action.data : action }, meta: { schema_version: 2 } };
     }
   }

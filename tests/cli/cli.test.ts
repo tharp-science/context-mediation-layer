@@ -680,6 +680,24 @@ if (command === "create") {
     expect(listed.data.some((intent: { description: string }) => intent.description === "CLI intent")).toBe(true);
   });
 
+  it("stamps proxy origin by default", () => {
+    const created = cli(["intent", "create", "--description", "d", "--source", "s"]);
+    expect(created.ok).toBe(true);
+    expect(created.data.originKind).toBe("proxy");
+  });
+
+  it("stamps direct origin when --origin direct is passed", () => {
+    const created = cli(["intent", "create", "--description", "d", "--source", "s", "--origin", "direct"]);
+    expect(created.ok).toBe(true);
+    expect(created.data.originKind).toBe("direct");
+  });
+
+  it("resolves an unrecognised --origin value to proxy", () => {
+    const created = cli(["intent", "create", "--description", "d", "--source", "s", "--origin", "nonsense"]);
+    expect(created.ok).toBe(true);
+    expect(created.data.originKind).toBe("proxy");
+  });
+
   it("accepts --key=value flags", () => {
     const created = cli(["intent", "create", "--description=Equals intent", "--source=test"]);
     expect(created.ok).toBe(true);

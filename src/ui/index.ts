@@ -43,7 +43,7 @@ export function createCmlUiServer(options: CmlUiOptions = {}): Server {
   const repo = options.repository ?? (options.dbPath ? openRepository(options.dbPath) : undefined);
   const context: UiContext = {
     repo,
-    service: repo ? new GovernanceService(repo) : undefined,
+    service: repo ? new GovernanceService(repo, { origin: "proxy" }) : undefined,
     setupError: repo ? undefined : {
       code: "DB_PATH_REQUIRED",
       message: "Set CML_DB_PATH before starting cml-ui, or run `cml init`.",

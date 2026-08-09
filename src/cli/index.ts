@@ -16,6 +16,7 @@ import {
   IntentStatus,
   InterpretationAlignment,
   InterpretationStatus,
+  OriginKind,
 } from "../governance/domain.js";
 import { inspectIntent, inspectInterpretation } from "../orchestration/inspect.js";
 import { ObsidianVaultService } from "../vault/obsidian-vault-service.js";
@@ -210,6 +211,12 @@ function configNumber(flags: Flags, config: ConfigBundle, name: string, envName:
   return configValue;
 }
 
+function resolveOrigin(flags: Flags, config: ConfigBundle): OriginKind {
+  // Anything that isn't exactly "direct" resolves to "proxy" — the safe default, since
+  // an unrecognised value is not evidence the operator emitted it.
+  return configString(flags, config, "origin", "CML_ORIGIN", undefined) === "direct" ? "direct" : "proxy";
+}
+
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -283,6 +290,7 @@ function usage(): ServiceResponse<{ commands: string[] }> {
         "cml resolve <INTENT-35|INTERPRETATION-101|REPORT-8>",
         "cml context <INTENT-35|INTERPRETATION-101>",
         "cml status",
+        "  global flags: --actor <name> --origin <direct|proxy> --db <path> --pretty",
       ],
     },
     meta: { schema_version: 2 },
@@ -383,7 +391,7 @@ async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> 
   }
 
   const repo = new SqliteGovernanceRepository(dbPath);
-  const service = new GovernanceService(repo);
+  const service = new GovernanceService(repo, { origin: resolveOrigin(flags, config) });
   try {
     const scopes = await repo.listScopes();
     const scopeAlreadyExists = scopes.includes(scope);
@@ -1297,7 +1305,8 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const response = await dispatch({ service: new GovernanceService(repo), actor, pretty }, command, flags, config);
+    const service = new GovernanceService(repo, { origin: resolveOrigin(flags, config) });
+    const response = await dispatch({ service, actor, pretty }, command, flags, config);
     printJson(response, pretty);
     if (typeof response === "object" && response !== null && "ok" in response && (response as { ok: boolean }).ok === false) {
       process.exitCode = 1;

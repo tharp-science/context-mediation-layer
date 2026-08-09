@@ -951,7 +951,7 @@ export class CmlMcpServer {
     try {
       return await fn({
         repo,
-        service: new GovernanceService(repo),
+        service: new GovernanceService(repo, { origin: "proxy" }),
         defaultActor: actor,
         defaultActorId: actorId,
         publicMcpBaseUrl: publicMcpBaseUrl(env),

@@ -46,6 +46,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
         scope: "default",
         description: "Verify M2 mechiso runs completed on server",
         source: "test",
+        originKind: "proxy",
         status: "active",
       },
       actorId(1)
@@ -58,7 +59,8 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
       title: "SSH to server, check outbox for completed run files",
       status: "proposed",
       alignment: "aligned",
-    });
+      originKind: "proxy",
+    }, actorId(1));
 
     return { intent, interp };
   }
@@ -219,6 +221,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
         scope: "default",
         description: "Already closed intent",
         source: "test",
+        originKind: "proxy",
         status: "closed",
       },
       actorId(1)
@@ -245,6 +248,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
         scope: "default",
         description: "Still in draft",
         source: "test",
+        originKind: "proxy",
         // status defaults to "draft"
       },
       actorId(1)
@@ -283,7 +287,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
 
     // Create a second intent with its own interpretation
     const otherIntent = await repo.createIntent(
-      { scope: "default", description: "Other intent", source: "test", status: "active" },
+      { scope: "default", description: "Other intent", source: "test", originKind: "proxy", status: "active" },
       actorId(1)
     );
     const otherInterp = await repo.createInterpretation({
@@ -293,7 +297,8 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
       title: "Belongs to other intent",
       status: "proposed",
       alignment: "aligned",
-    });
+      originKind: "proxy",
+    }, actorId(1));
 
     const result = await orchestrator.executeStep({
       intentId: intent.id,
@@ -315,7 +320,11 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
     await repo.supersedeInterpretation(
       interp.id,
       "Updated understanding",
-      "Original was wrong"
+      "Original was wrong",
+      undefined,
+      undefined,
+      actorId(1),
+      "proxy"
     );
 
     const result = await orchestrator.executeStep({
@@ -396,6 +405,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
         scope: "product",
         description: "Deploy staging environment for client demo",
         source: "ops-team",
+        originKind: "proxy",
         status: "active",
       },
       actorId(1)
@@ -408,7 +418,8 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
       title: "Run deploy script against staging cluster",
       status: "proposed",
       alignment: "aligned",
-    });
+      originKind: "proxy",
+    }, actorId(2));
 
     const result = await orchestrator.executeStep({
       intentId: intent.id,

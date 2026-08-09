@@ -229,7 +229,10 @@ export class ExecutionOrchestrator {
         actorId,
         description: `Execution step failed to start: ${params.task}`,
         outcome: `Error: ${err}`,
-      });
+        // Orchestrator-originated fold-back, not an operator emission — Task 7 wires
+        // origin at this surface; default to "proxy" until then.
+        originKind: "proxy",
+      }, actorId);
 
       await this.releaseWorkspace(workspaceId, requestId, intentId, actorId, eventIds);
 
@@ -294,7 +297,10 @@ export class ExecutionOrchestrator {
       outcome: status === "completed"
         ? runtimeResult.output ?? "completed"
         : runtimeResult.error ?? status,
-    });
+      // Orchestrator-originated fold-back, not an operator emission — Task 7 wires
+      // origin at this surface; default to "proxy" until then.
+      originKind: "proxy",
+    }, actorId);
 
     // 9. Release workspace
     await this.releaseWorkspace(workspaceId, requestId, intentId, actorId, eventIds);

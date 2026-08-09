@@ -70,6 +70,21 @@ export type GovernanceRoleStatus = "active" | "suspended" | "retired";
 export type ActorRoleBindingStatus = "active" | "suspended" | "retired";
 export type ActorSessionStatus = "active" | "closed";
 
+/**
+ * Who emitted a record.
+ *
+ * `direct` — emitted by the operator through their own surface.
+ * `proxy`  — emitted by an agent or adapter, whatever actor it names.
+ *
+ * Derived from transport, so it is assertable rather than proven. Display it
+ * as such. Deliberately not named `provenance`: that word meant origin and
+ * mandate together in an earlier design and the two are separate here.
+ * Mandate lives in `intent_id`, which interpretations and actions already carry.
+ */
+export type OriginKind = "direct" | "proxy";
+
+export const ORIGIN_KINDS: readonly OriginKind[] = ["direct", "proxy"] as const;
+
 export interface Actor {
   id: ActorId;
   name: string; // unique
@@ -177,6 +192,7 @@ export interface Intent {
   status: IntentStatus;
   version: number; // incremented on each update
   source: string; // who seeded it (channel/person)
+  originKind: OriginKind; // who emitted this record: operator directly, or by proxy
   addressedTo?: ActorId; // optional routing to a specific actor
   parentId?: IntentId; // null = top-level directive, set = delegation sub-intent
   createdAt: Date;
@@ -211,6 +227,7 @@ export interface Interpretation {
   resolveBy?: Date; // deadline if one is set
   supersededBy?: InterpretationId; // link to replacement if superseded
   sourceRef?: string; // thread/session that emitted this
+  originKind: OriginKind; // who emitted this record: operator directly, or by proxy
   createdAt: Date;
   updatedAt: Date;
 }
@@ -237,6 +254,7 @@ export interface Action {
   policyRef?: string;
   description: string; // what was done
   outcome?: string; // result or verification
+  originKind: OriginKind; // who emitted this record: operator directly, or by proxy
   createdAt: Date;
 }
 
@@ -291,6 +309,8 @@ export interface Report {
   domainId?: DomainId;
   intentId?: IntentId;
   sourceRef?: string;
+  originKind: OriginKind; // who emitted this record: operator directly, or by proxy
+  unmandatedReason?: string; // present = deliberately filed with no mandating intent
   createdAt: Date;
 }
 

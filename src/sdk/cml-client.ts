@@ -77,7 +77,7 @@ export class CmlClient {
       this.ownsRepo = true;
     }
 
-    this.service = new GovernanceService(this.repo);
+    this.service = new GovernanceService(this.repo, { origin: "proxy" });
     this.vaultService = new ObsidianVaultService({
       obsidianBin: options.obsidianBin ?? env.CML_OBSIDIAN_BIN,
       vaultName: options.vaultName ?? env.CML_OBSIDIAN_VAULT,
@@ -99,13 +99,13 @@ export class CmlClient {
           ...params,
           source: params.source ?? `cml-sdk:${actor.name}`,
           scope: params.scope ?? actor.defaultScope,
-          actorId: actor.id,
+          callerActorId: actor.id,
         })),
       get: (id: number) => this.withActor(() => this.service.getIntent(id)),
       list: (params?: { scope?: string; status?: IntentStatus; addressedTo?: number; parentId?: number | null; limit?: number; offset?: number }) =>
         this.withActor((actor) => this.service.listIntents({ scope: params?.scope ?? actor.defaultScope, ...params })),
       update: (params: { id: number; reason: string; status?: IntentStatus; description?: string; resolutionNotes?: string; addressedTo?: number }) =>
-        this.withActor((actor) => this.service.updateIntent({ ...params, actorId: actor.id })),
+        this.withActor((actor) => this.service.updateIntent({ ...params, callerActorId: actor.id })),
     };
   }
 
@@ -114,29 +114,29 @@ export class CmlClient {
       create: (params: { intentId: number; domainId: number; title: string; scopeAssumption?: string; status?: InterpretationStatus; alignment?: InterpretationAlignment; sourceRef?: string; resolverId?: number; resolveBy?: string }) =>
         this.withActor((actor) => this.service.registerInterpretation({
           ...params,
-          actorId: actor.id,
+          callerActorId: actor.id,
           sourceRef: params.sourceRef ?? `cml-sdk:${actor.name}`,
         })),
       file: (params: { intentId: number; domainId: number; title: string; scopeAssumption?: string; status?: InterpretationStatus; alignment?: InterpretationAlignment; sourceRef?: string; resolverId?: number; resolveBy?: string }) =>
         this.withActor((actor) => this.service.registerInterpretation({
           ...params,
-          actorId: actor.id,
+          callerActorId: actor.id,
           sourceRef: params.sourceRef ?? `cml-sdk:${actor.name}`,
         })),
       get: (id: number) => this.withActor(() => this.service.getInterpretation(id)),
       list: (params?: { intentId?: number; domainId?: number; actorId?: number; status?: InterpretationStatus; alignment?: InterpretationAlignment; limit?: number; offset?: number }) =>
         this.withActor(() => this.service.listInterpretations(params)),
       update: (params: { id: number; reason: string; status?: InterpretationStatus; alignment?: InterpretationAlignment; resolverId?: number; resolveBy?: string; scopeAssumption?: string; sourceRef?: string }) =>
-        this.withActor((actor) => this.service.updateInterpretation({ ...params, actorId: actor.id })),
+        this.withActor((actor) => this.service.updateInterpretation({ ...params, callerActorId: actor.id })),
       supersede: (params: { id: number; newTitle: string; reason: string; newScopeAssumption?: string; newStatus?: InterpretationStatus }) =>
-        this.withActor(() => this.service.supersedeInterpretation(params)),
+        this.withActor((actor) => this.service.supersedeInterpretation({ ...params, callerActorId: actor.id })),
     };
   }
 
   get action() {
     return {
       log: (params: { intentId: number; description: string; interpretationId?: number; domainId?: number; governingContractKey?: string; outcome?: string; assumedRole?: string; invokedSkillRef?: string; policyRef?: string }) =>
-        this.withActor((actor) => this.service.logAction({ ...params, actorId: actor.id })),
+        this.withActor((actor) => this.service.logAction({ ...params, callerActorId: actor.id })),
       list: (params?: { intentId?: number; actorId?: number; domainId?: number; governingContractKey?: string; limit?: number; offset?: number }) =>
         this.withActor(() => this.service.listActions(params)),
     };
@@ -148,10 +148,12 @@ export class CmlClient {
         this.withActor((actor) => this.service.claim({
           entityTable: params.entityTable ?? "intents",
           entityId: params.entityId,
-          actorId: actor.id,
+          subjectActorId: actor.id,
+          callerActorId: actor.id,
           note: params.note,
         })),
-      release: (params: { id: number; reason?: string }) => this.withActor(() => this.service.releaseClaim(params)),
+      release: (params: { id: number; reason?: string }) =>
+        this.withActor((actor) => this.service.releaseClaim({ ...params, callerActorId: actor.id })),
       list: (params?: { entityTable?: string; entityId?: number; status?: ClaimStatus; limit?: number; offset?: number }) =>
         this.withActor(() => this.service.listClaims(params)),
     };
@@ -163,10 +165,11 @@ export class CmlClient {
       get: (params: { id?: number; name?: string }) => this.withActor(() => this.service.getActor(params)),
       list: (params?: { status?: ActorStatus; provider?: string }) => this.withActor(() => this.service.listActors(params)),
       provision: (params: { name: string; role: "human" | "agent"; provider: string; actorType?: string; capabilityNamespace: string; defaultScope?: string; sessionId?: string; status?: ActorStatus; contractKey?: string; defaultContractKey?: string; contractRef?: string; contextRef?: string; contextPolicy?: string; description?: string }) =>
-        this.withActor(() => this.service.registerActor(params)),
+        this.withActor((actor) => this.service.registerActor({ ...params, callerActorId: actor.id })),
       update: (params: { id: number; name?: string; role?: "human" | "agent"; provider?: string; actorType?: string; capabilityNamespace?: string; defaultScope?: string; sessionId?: string; status?: ActorStatus; contractKey?: string; defaultContractKey?: string; contractRef?: string; contextRef?: string; contextPolicy?: string; description?: string }) =>
-        this.withActor(() => this.service.updateActor(params)),
-      retire: (params: { id: number; reason?: string }) => this.withActor(() => this.service.retireActor(params)),
+        this.withActor((actor) => this.service.updateActor({ ...params, callerActorId: actor.id })),
+      retire: (params: { id: number; reason?: string }) =>
+        this.withActor((actor) => this.service.retireActor({ ...params, callerActorId: actor.id })),
     };
   }
 
@@ -182,11 +185,11 @@ export class CmlClient {
   get session() {
     return {
       open: (params: { sessionRef: string; surface: string; provider?: string; transcriptRef?: string }) =>
-        this.withActor((actor) => this.service.openActorSession({ ...params, actorId: actor.id })),
+        this.withActor((actor) => this.service.openActorSession({ ...params, subjectActorId: actor.id, callerActorId: actor.id })),
       heartbeat: (params: { sessionRef: string }) =>
-        this.withActor((actor) => this.service.heartbeatActorSession({ ...params, actorId: actor.id })),
+        this.withActor((actor) => this.service.heartbeatActorSession({ ...params, subjectActorId: actor.id, callerActorId: actor.id })),
       close: (params: { sessionRef: string }) =>
-        this.withActor((actor) => this.service.closeActorSession({ ...params, actorId: actor.id })),
+        this.withActor((actor) => this.service.closeActorSession({ ...params, subjectActorId: actor.id, callerActorId: actor.id })),
       list: (params?: { actorId?: number; status?: ActorSessionStatus; limit?: number; offset?: number }) =>
         this.withActor((actor) => this.service.listActorSessions({ ...params, actorId: params?.actorId ?? actor.id })),
     };
@@ -197,7 +200,7 @@ export class CmlClient {
       create: (params: { kind: string; title: string; summary: string; scope?: string; bodyRef?: string; domainId?: number; intentId?: number; sourceRef?: string; assumedRole?: string; invokedSkillRef?: string; policyRef?: string }) =>
         this.withActor((actor) => this.service.registerReport({
           ...params,
-          actorId: actor.id,
+          callerActorId: actor.id,
           scope: params.scope ?? actor.defaultScope,
         })),
       get: (id: number) => this.withActor(() => this.service.getReport(id)),
@@ -213,6 +216,7 @@ export class CmlClient {
           ...params,
           scope: params.scope ?? actor.defaultScope,
           custodianActorId: actor.id,
+          callerActorId: actor.id,
         })),
       get: (params: { id?: number; key?: string; status?: ContractStatus }) =>
         this.withActor(() => this.service.getContract(params)),
@@ -222,6 +226,7 @@ export class CmlClient {
         this.withActor((actor) => this.service.supersedeContract({
           ...params,
           custodianActorId: actor.id,
+          callerActorId: actor.id,
         })),
     };
   }
@@ -233,6 +238,7 @@ export class CmlClient {
           ...params,
           scope: params.scope ?? actor.defaultScope,
           custodianActorId: actor.id,
+          callerActorId: actor.id,
         })),
       get: (params: { name: string; status?: ContractStatus }) => {
         const key = `actor-type:${params.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")}`;
@@ -246,7 +252,7 @@ export class CmlClient {
   get domain() {
     return {
       register: (params: { scope?: string; name: string; concern: string; notionPageId?: string }) =>
-        this.withActor((actor) => this.service.registerDomain({ ...params, scope: params.scope ?? actor.defaultScope })),
+        this.withActor((actor) => this.service.registerDomain({ ...params, scope: params.scope ?? actor.defaultScope, callerActorId: actor.id })),
       get: (id: number) => this.withActor(() => this.service.getDomain(id)),
       list: () => this.withActor(() => this.service.listDomains()),
     };
@@ -254,7 +260,8 @@ export class CmlClient {
 
   get scope() {
     return {
-      register: (params: { scope: string }) => this.withActor(() => this.service.registerScope(params)),
+      register: (params: { scope: string }) =>
+        this.withActor((actor) => this.service.registerScope({ ...params, callerActorId: actor.id })),
       list: () => this.withActor(() => this.service.listScopes()),
     };
   }
@@ -262,7 +269,7 @@ export class CmlClient {
   get expertise() {
     return {
       register: (params: { intentId: number; domainId: number; signal: ExpertiseSignal; note?: string }) =>
-        this.withActor((actor) => this.service.registerExpertise({ ...params, actorId: actor.id })),
+        this.withActor((actor) => this.service.registerExpertise({ ...params, callerActorId: actor.id })),
       coverage: (params: { intentId: number }) => this.withActor(() => this.service.getExpertiseCoverage(params)),
     };
   }
@@ -320,7 +327,7 @@ export class CmlClient {
       const result = await mutate();
       const action = await this.service.logAction({
         intentId,
-        actorId: actor.id,
+        callerActorId: actor.id,
         governingContractKey: invocation?.governingContractKey,
         assumedRole: invocation?.assumedRole,
         invokedSkillRef: invocation?.invokedSkillRef,

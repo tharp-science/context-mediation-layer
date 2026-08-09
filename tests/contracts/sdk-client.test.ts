@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { InMemoryGovernanceRepository } from "../../src/governance/repository.js";
+import { actorId } from "../../src/governance/domain.js";
 import { CmlClient } from "../../src/sdk/cml-client.js";
 
 describe("CmlClient", () => {
@@ -58,7 +59,7 @@ if (command === "create") {
     chmodSync(obsidianBin, 0o755);
 
     repo = new InMemoryGovernanceRepository();
-    await repo.registerScope("default");
+    await repo.registerScope("default", actorId(0));
     await repo.registerActor({
       name: "sdk-agent",
       role: "agent",
@@ -67,7 +68,7 @@ if (command === "create") {
       defaultScope: "default",
       contractRef: "contracts/sdk-agent.md",
       contextRef: "context/sdk-agent.md",
-    });
+    }, actorId(0));
   });
 
   afterEach(() => {
@@ -137,7 +138,7 @@ if (command === "create") {
       capabilityNamespace: "sdk-test",
       defaultScope: "default",
       status: "retired",
-    });
+    }, actorId(0));
     expect(retired.status).toBe("retired");
 
     const result = await client("retired-sdk-agent").intent.create({ description: "Should fail" });

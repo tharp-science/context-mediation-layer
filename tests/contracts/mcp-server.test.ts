@@ -56,14 +56,16 @@ if (command === "create") {
     chmodSync(obsidianBin, 0o755);
 
     repo = new InMemoryGovernanceRepository();
-    await repo.registerScope("default");
-    await repo.registerActor({
+    // Self-attributed: the first actor in a fresh, actor-less repository has nothing
+    // else to name as its caller (actorId(1) is the id this insert always receives).
+    const bootstrapActor = await repo.registerActor({
       name: "mcp-agent",
       role: "agent",
       provider: "openai-codex",
       capabilityNamespace: "mcp-test",
       defaultScope: "default",
-    });
+    }, actorId(1));
+    await repo.registerScope("default", bootstrapActor.id);
     server = new CmlMcpServer({
       repository: repo,
       defaultActor: "mcp-agent",
@@ -122,14 +124,14 @@ if (command === "create") {
       name: "kinkscapes-collaborator",
       contractKey: "role:kinkscapes-collaborator",
       description: "Role-bound collaborator profile.",
-    });
+    }, actorId(1));
     const binding = await repo.bindActorRole({
       actorId: actorId(1),
       roleId: role.id,
       surface: "grok-mcp",
       provider: "xai-grok",
       credentialRef: "oauth-client:grok-kinkscapes",
-    });
+    }, actorId(1));
 
     const actors = await server.handle({
       jsonrpc: "2.0",
@@ -219,11 +221,12 @@ if (command === "create") {
       name: "framework",
       scope: "default",
       concern: "MCP operator testing",
-    });
+    }, actorId(1));
     await repo.createIntent({
       scope: "default",
       description: "Existing MCP operator intent",
       source: "test",
+      originKind: "proxy",
       status: "active",
     }, actorId(1));
 
@@ -483,7 +486,11 @@ if (command === "create") {
       jsonrpc: "2.0",
       id: 42,
       method: "tools/call",
-      params: { name: "event_list", arguments: { limit: 10 } },
+      // limit raised from 10: registerScope/registerActor/registerDomain now emit events
+      // too (Task 5), so the fixture's setup calls push more events onto the list before
+      // this test's own interpretation_superseded — a plain event count change, not a
+      // pagination behaviour this test is meant to pin.
+      params: { name: "event_list", arguments: { limit: 50 } },
     });
     expect(events?.result).toMatchObject({
       isError: false,
@@ -550,7 +557,8 @@ if (command === "create") {
       scope: "default",
       description: "MCP vault mandate",
       source: "test",
-    });
+      originKind: "proxy",
+    }, actorId(1));
 
     const response = await server.handle({
       jsonrpc: "2.0",
@@ -622,7 +630,8 @@ if (command === "create") {
       scope: "default",
       description: "MCP append mandate",
       source: "test",
-    });
+      originKind: "proxy",
+    }, actorId(1));
     const response = await server.handle({
       jsonrpc: "2.0",
       id: 6,

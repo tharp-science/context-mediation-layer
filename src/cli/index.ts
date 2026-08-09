@@ -16,6 +16,7 @@ import {
   IntentStatus,
   InterpretationAlignment,
   InterpretationStatus,
+  OriginKind,
 } from "../governance/domain.js";
 import { inspectIntent, inspectInterpretation } from "../orchestration/inspect.js";
 import { ObsidianVaultService } from "../vault/obsidian-vault-service.js";
@@ -210,6 +211,12 @@ function configNumber(flags: Flags, config: ConfigBundle, name: string, envName:
   return configValue;
 }
 
+function resolveOrigin(flags: Flags, config: ConfigBundle): OriginKind {
+  // Anything that isn't exactly "direct" resolves to "proxy" — the safe default, since
+  // an unrecognised value is not evidence the operator emitted it.
+  return configString(flags, config, "origin", "CML_ORIGIN", undefined) === "direct" ? "direct" : "proxy";
+}
+
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -272,7 +279,8 @@ function usage(): ServiceResponse<{ commands: string[] }> {
         "cml role list|get|register|bind|bindings",
         "cml actor-type register|get|list",
         "cml session open|heartbeat|close|list",
-        "cml report create|list|get",
+        "cml report create [--unmandated-reason <why>]",
+        "cml report list|get",
         "cml contract register|get|list|supersede|import",
         "cml domain register|list|get",
         "cml scope register|list",
@@ -282,6 +290,7 @@ function usage(): ServiceResponse<{ commands: string[] }> {
         "cml resolve <INTENT-35|INTERPRETATION-101|REPORT-8>",
         "cml context <INTENT-35|INTERPRETATION-101>",
         "cml status",
+        "  global flags: --actor <name> --origin <direct|proxy> --db <path> --pretty",
       ],
     },
     meta: { schema_version: 2 },
@@ -317,7 +326,7 @@ async function logVaultMutation(
 ): Promise<ServiceResponse<unknown>> {
   return ctx.service.logAction({
     intentId: params.intentId,
-    actorId: ctx.actor.id,
+    callerActorId: ctx.actor.id,
     description: `Vault ${params.operation}: ${params.path ?? "(no path)"}${params.destination ? ` -> ${params.destination}` : ""}`,
     outcome: params.outcome,
   });
@@ -382,10 +391,70 @@ async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> 
   }
 
   const repo = new SqliteGovernanceRepository(dbPath);
-  const service = new GovernanceService(repo);
+  const service = new GovernanceService(repo, { origin: resolveOrigin(flags, config) });
   try {
     const scopes = await repo.listScopes();
-    if (!scopes.includes(scope)) requireOk(await service.registerScope({ scope }));
+    const scopeAlreadyExists = scopes.includes(scope);
+
+    // Every governed write now needs a real callerActorId, and an actor row is a
+    // precondition for emitting any event at all (events.actor_id is a NOT NULL FK).
+    // Actor resolution therefore has to happen before scope/domain registration, not
+    // after, so those calls have a real actor to name as caller.
+    let actor = await repo.getActorByName(actorName);
+    // Tracks whether *this actor* was just minted by *this* init call using the
+    // 'default' placeholder scope (see the defaultScope comments below) — not whether
+    // the target scope happens to be new. Gates the reconciliation below: only an
+    // actor created this run with a placeholder may have that placeholder corrected.
+    // A pre-existing actor's defaultScope is never a side effect of init.
+    let createdWithPlaceholderScope = false;
+    if (!actor) {
+      const existingActors = await repo.listActors();
+      createdWithPlaceholderScope = !scopeAlreadyExists;
+      if (existingActors.length > 0) {
+        // Some other actor already exists in this database (e.g. re-running `init` with
+        // a different --actor against an already-provisioned db); it caused this actor
+        // to be provisioned, so it is the caller.
+        actor = requireOk(await service.registerActor({
+          name: actorName,
+          role,
+          provider,
+          capabilityNamespace: config.data.actor?.capabilityNamespace ?? "local",
+          // 'default' is seeded unconditionally by SqliteGovernanceRepository on schema
+          // creation (ensureCoreSchema), so it always satisfies actors.default_scope's FK
+          // even when the target `scope` doesn't exist as a row yet. Reconciled below.
+          defaultScope: scopeAlreadyExists ? scope : "default",
+          status: "active",
+          description: "Default local operator created by CML init.",
+          callerActorId: existingActors[0].id,
+        }));
+      } else {
+        // True cold start: this is the first actor in a brand-new database, so there is
+        // no other actor to name as the caller of its own "actor_registered" event. It
+        // is recorded as the caller of its own genesis event — self-attribution,
+        // analogous to a self-signed root certificate or a parentless genesis commit —
+        // resolved by the repository itself via the "self" sentinel: it inserts the
+        // actor row, reads back its real id, and emits the event naming that id, all
+        // inside one transaction, so there is no window where the row is committed
+        // without its event.
+        actor = requireOk(await service.registerActor({
+          name: actorName,
+          role,
+          provider,
+          capabilityNamespace: config.data.actor?.capabilityNamespace ?? "local",
+          defaultScope: scopeAlreadyExists ? scope : "default",
+          status: "active",
+          description: "Default local operator created by CML init.",
+          callerActorId: "self",
+        }));
+      }
+    }
+
+    if (!scopeAlreadyExists) {
+      requireOk(await service.registerScope({ scope, callerActorId: actor.id }));
+    }
+    if (createdWithPlaceholderScope && actor.defaultScope !== scope) {
+      actor = requireOk(await service.updateActor({ id: actor.id, defaultScope: scope, callerActorId: actor.id }));
+    }
 
     const domains = await repo.listDomains();
     let domain = domains.find((item) => item.scope === scope && item.name === "Coordination");
@@ -394,19 +463,7 @@ async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> 
         scope,
         name: "Coordination",
         concern: "Mediation surface, intent state, contracts, actions, claims, and reports.",
-      }));
-    }
-
-    let actor = await repo.getActorByName(actorName);
-    if (!actor) {
-      actor = requireOk(await service.registerActor({
-        name: actorName,
-        role,
-        provider,
-        capabilityNamespace: config.data.actor?.capabilityNamespace ?? "local",
-        defaultScope: scope,
-        status: "active",
-        description: "Default local operator created by CML init.",
+        callerActorId: actor.id,
       }));
     }
 
@@ -421,6 +478,7 @@ async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> 
         title: "CML Bootstrap Contract",
         body: "This root contract anchors local CML setup. It authorizes reversible local governance, configuration, and contract import operations for a pilot instance.",
         custodianActorId: actor.id,
+        callerActorId: actor.id,
         status: "active",
       }));
     }
@@ -437,6 +495,7 @@ async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> 
         title: "Default Agent Actor Type",
         body: "Default agent actors participate by resolving governed state first, separating observed, inferred, unresolved, and proposed material when the work is substantive, and recording governed writes when they act.",
         custodianActorId: actor.id,
+        callerActorId: actor.id,
         status: "active",
         governingContractKey: rootKey,
       }));
@@ -448,12 +507,14 @@ async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> 
         name: "operator",
         contractKey: rootKey,
         description: "Local operator role for setup, QA, and pilot operations.",
+        callerActorId: actor.id,
       }));
     }
 
     const bindings = await repo.listActorRoleBindings({ actorId: actor.id, roleId: roleRecord.id, surface: "cli", status: "active" });
     const binding = bindings[0] ?? requireOk(await service.bindActorRole({
-      actorId: actor.id,
+      subjectActorId: actor.id,
+      callerActorId: actor.id,
       roleId: roleRecord.id,
       surface: "cli",
       provider,
@@ -604,6 +665,7 @@ async function handleContractImport(ctx: CliContext, flags: Flags): Promise<unkn
       title: stringProp(contract, "title", true) as string,
       body: stringProp(contract, "body", true) as string,
       custodianActorId: ctx.actor.id,
+      callerActorId: ctx.actor.id,
       scope: stringProp(contract, "scope") ?? ctx.actor.defaultScope,
       domainId: typeof contract.domainId === "number" ? contract.domainId : undefined,
       parentKey: stringProp(contract, "parentKey"),
@@ -619,6 +681,7 @@ async function handleContractImport(ctx: CliContext, flags: Flags): Promise<unkn
       title: stringProp(actorType, "title"),
       body: stringProp(actorType, "body", true) as string,
       custodianActorId: ctx.actor.id,
+      callerActorId: ctx.actor.id,
       scope: stringProp(actorType, "scope") ?? ctx.actor.defaultScope,
       domainId: typeof actorType.domainId === "number" ? actorType.domainId : undefined,
       parentKey: stringProp(actorType, "parentKey"),
@@ -631,6 +694,7 @@ async function handleContractImport(ctx: CliContext, flags: Flags): Promise<unkn
   for (const role of asObjectArray(payload.roles, "roles")) {
     imported.push(await ctx.service.registerRole({
       name: stringProp(role, "name", true) as string,
+      callerActorId: ctx.actor.id,
       status: stringProp(role, "status") as any,
       contractKey: stringProp(role, "contractKey"),
       contractRef: stringProp(role, "contractRef"),
@@ -716,7 +780,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         description: requiredFlag(flags, "description"),
         source: flag(flags, "source") ?? `cml-cli:${ctx.actor.name}`,
         addressedTo: intFlag(flags, "addressed-to"),
-        actorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
       });
     }
     if (op === "update") {
@@ -726,7 +790,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         reason: requiredFlag(flags, "reason"),
         description: flag(flags, "description"),
         resolutionNotes: flag(flags, "resolution-notes"),
-        actorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
       });
     }
   }
@@ -736,7 +800,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
       return ctx.service.registerInterpretation({
         intentId: requiredIntFlag(flags, "intent"),
         domainId: requiredIntFlag(flags, "domain"),
-        actorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
         title: requiredFlag(flags, "title"),
         scopeAssumption: flag(flags, "scope-assumption"),
         status: enumFlag(flags, "status", INTERPRETATION_STATUSES),
@@ -757,6 +821,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         id: Number(id),
         newTitle: requiredFlag(flags, "title"),
         reason: requiredFlag(flags, "reason"),
+        callerActorId: ctx.actor.id,
         newScopeAssumption: flag(flags, "scope-assumption"),
         newStatus: enumFlag(flags, "status", INTERPRETATION_STATUSES),
       });
@@ -767,7 +832,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
     if (op === "log") {
       return ctx.service.logAction({
         intentId: requiredIntFlag(flags, "intent"),
-        actorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
         interpretationId: intFlag(flags, "interpretation"),
         domainId: intFlag(flags, "domain"),
         governingContractKey: flag(flags, "governing-contract-key"),
@@ -792,13 +857,15 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
       return ctx.service.claim({
         entityTable: flag(flags, "entity-table") ?? "intents",
         entityId: requiredIntFlag(flags, "entity-id"),
-        actorId: ctx.actor.id,
+        subjectActorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
         note: flag(flags, "description") ?? flag(flags, "note"),
       });
     }
     if (op === "release") {
       return ctx.service.releaseClaim({
         id: Number(id),
+        callerActorId: ctx.actor.id,
         reason: flag(flags, "reason"),
       });
     }
@@ -834,11 +901,13 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         contextRef: flag(flags, "context-ref"),
         contextPolicy: flag(flags, "context-policy"),
         description: flag(flags, "description"),
+        callerActorId: ctx.actor.id,
       });
     }
     if (op === "update") {
       return ctx.service.updateActor({
         id: Number(id),
+        callerActorId: ctx.actor.id,
         name: flag(flags, "name"),
         role: enumFlag(flags, "role", ["human", "agent"] as const),
         provider: flag(flags, "provider"),
@@ -857,6 +926,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
     if (op === "retire") {
       return ctx.service.retireActor({
         id: Number(id),
+        callerActorId: ctx.actor.id,
         reason: flag(flags, "reason"),
       });
     }
@@ -872,6 +942,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
     if (op === "register") {
       return ctx.service.registerRole({
         name: requiredFlag(flags, "name"),
+        callerActorId: ctx.actor.id,
         status: enumFlag(flags, "status", ROLE_STATUSES) as any,
         contractKey: flag(flags, "contract-key"),
         contractRef: flag(flags, "contract-ref"),
@@ -882,7 +953,8 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
     }
     if (op === "bind") {
       return ctx.service.bindActorRole({
-        actorId: intFlag(flags, "actor-id") ?? ctx.actor.id,
+        subjectActorId: intFlag(flags, "actor-id") ?? ctx.actor.id,
+        callerActorId: ctx.actor.id,
         roleId: requiredIntFlag(flags, "role-id"),
         surface: requiredFlag(flags, "surface"),
         provider: requiredFlag(flags, "provider"),
@@ -907,6 +979,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         title: flag(flags, "title"),
         body: requiredFlag(flags, "body"),
         custodianActorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
         scope: flag(flags, "scope") ?? ctx.actor.defaultScope,
         domainId: intFlag(flags, "domain"),
         parentKey: flag(flags, "parent-key"),
@@ -935,7 +1008,8 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
   if (group === "session") {
     if (op === "open") {
       return ctx.service.openActorSession({
-        actorId: ctx.actor.id,
+        subjectActorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
         sessionRef: requiredFlag(flags, "session-ref"),
         surface: requiredFlag(flags, "surface"),
         provider: flag(flags, "provider"),
@@ -944,13 +1018,15 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
     }
     if (op === "heartbeat") {
       return ctx.service.heartbeatActorSession({
-        actorId: ctx.actor.id,
+        subjectActorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
         sessionRef: requiredFlag(flags, "session-ref"),
       });
     }
     if (op === "close") {
       return ctx.service.closeActorSession({
-        actorId: ctx.actor.id,
+        subjectActorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
         sessionRef: requiredFlag(flags, "session-ref"),
       });
     }
@@ -964,11 +1040,12 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
 
   if (group === "report") {
     if (op === "create") {
+      const rawUnmandatedReason = flag(flags, "unmandated-reason");
       return ctx.service.registerReport({
         kind: requiredFlag(flags, "kind"),
         title: requiredFlag(flags, "title"),
         summary: requiredFlag(flags, "summary"),
-        actorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
         scope: flag(flags, "scope") ?? ctx.actor.defaultScope,
         bodyRef: flag(flags, "body-ref"),
         domainId: intFlag(flags, "domain"),
@@ -977,6 +1054,10 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         assumedRole: flag(flags, "assumed-role"),
         invokedSkillRef: flag(flags, "invoked-skill-ref"),
         policyRef: flag(flags, "policy-ref"),
+        // Empty or whitespace-only reads as absent: "" would persist a third state
+        // ("deliberately unmandated, reason withheld") that the schema cannot express
+        // and no read path expects.
+        unmandatedReason: rawUnmandatedReason?.trim() ? rawUnmandatedReason : undefined,
       });
     }
     if (op === "list") {
@@ -1005,6 +1086,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         title: requiredFlag(flags, "title"),
         body: requiredFlag(flags, "body"),
         custodianActorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
         scope: flag(flags, "scope") ?? ctx.actor.defaultScope,
         domainId: intFlag(flags, "domain"),
         governingContractKey: flag(flags, "governing-contract-key"),
@@ -1043,6 +1125,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         governingContractKey: flag(flags, "governing-contract-key"),
         mandateRef: flag(flags, "mandate-ref"),
         custodianActorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
       });
     }
   }
@@ -1054,6 +1137,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         name: requiredFlag(flags, "name"),
         concern: requiredFlag(flags, "concern"),
         notionPageId: flag(flags, "notion-page-id"),
+        callerActorId: ctx.actor.id,
       });
     }
     if (op === "list") return ctx.service.listDomains();
@@ -1061,7 +1145,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
   }
 
   if (group === "scope") {
-    if (op === "register") return ctx.service.registerScope({ scope: requiredFlag(flags, "name") });
+    if (op === "register") return ctx.service.registerScope({ scope: requiredFlag(flags, "name"), callerActorId: ctx.actor.id });
     if (op === "list") return ctx.service.listScopes();
   }
 
@@ -1070,7 +1154,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
       return ctx.service.registerExpertise({
         intentId: requiredIntFlag(flags, "intent"),
         domainId: requiredIntFlag(flags, "domain"),
-        actorId: ctx.actor.id,
+        callerActorId: ctx.actor.id,
         signal: enumFlag(flags, "signal", EXPERTISE_SIGNALS) ?? "concerned",
         note: flag(flags, "note"),
       });
@@ -1225,7 +1309,8 @@ async function main(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    const response = await dispatch({ service: new GovernanceService(repo), actor, pretty }, command, flags, config);
+    const service = new GovernanceService(repo, { origin: resolveOrigin(flags, config) });
+    const response = await dispatch({ service, actor, pretty }, command, flags, config);
     printJson(response, pretty);
     if (typeof response === "object" && response !== null && "ok" in response && (response as { ok: boolean }).ok === false) {
       process.exitCode = 1;

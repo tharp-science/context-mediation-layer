@@ -32,6 +32,7 @@ import {
   InterpretationEnriched,
   InterpretationId,
   InterpretationStatus,
+  OriginKind,
   Report,
   ReportId,
   GovernanceRole,
@@ -73,13 +74,6 @@ function nullable<T>(value: T | null | undefined): T | undefined {
   return value == null ? undefined : value;
 }
 
-function requireActor(actor: ActorId | undefined, operation: string): ActorId {
-  if (actor == null) {
-    throw new Error(`${operation} requires actorId for event attribution`);
-  }
-  return actor;
-}
-
 function toDbDate(value: Date | undefined): string | null {
   return value ? value.toISOString() : null;
 }
@@ -94,6 +88,15 @@ function parseSnapshot(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
+function originKindFromRow(value: unknown): OriginKind {
+  // Columns added via addColumnIfMissing carry no CHECK constraint (SQLite's ALTER TABLE
+  // ADD COLUMN cannot carry one), so a corrupted or hand-inserted value outside the enum
+  // would otherwise read back as a validly-typed OriginKind. Treat anything other than the
+  // exact "direct" literal as "proxy" — an unrecognised value is not evidence the operator
+  // emitted it, so the safe default applies.
+  return value === "direct" ? "direct" : "proxy";
+}
+
 function intentFromRow(row: Row): Intent {
   return {
     id: intendId(Number(row.id)),
@@ -102,6 +105,7 @@ function intentFromRow(row: Row): Intent {
     status: String(row.status) as IntentStatus,
     version: Number(row.version),
     source: String(row.source),
+    originKind: originKindFromRow(row.origin_kind),
     addressedTo: row.addressed_to == null ? undefined : actorId(Number(row.addressed_to)),
     parentId: row.parent_id == null ? undefined : intendId(Number(row.parent_id)),
     createdAt: asDate(row.created_at),
@@ -124,6 +128,7 @@ function interpretationFromRow(row: Row): Interpretation {
     resolveBy: row.resolve_by == null ? undefined : asDate(row.resolve_by),
     supersededBy: row.superseded_by == null ? undefined : interpretationId(Number(row.superseded_by)),
     sourceRef: asString(row.source_ref),
+    originKind: originKindFromRow(row.origin_kind),
     createdAt: asDate(row.created_at),
     updatedAt: asDate(row.updated_at),
   };
@@ -142,6 +147,7 @@ function actionFromRow(row: Row): Action {
     policyRef: asString(row.policy_ref),
     description: String(row.description),
     outcome: asString(row.outcome),
+    originKind: originKindFromRow(row.origin_kind),
     createdAt: asDate(row.created_at),
   };
 }
@@ -305,6 +311,8 @@ function reportFromRow(row: Row): Report {
     domainId: row.domain_id == null ? undefined : domainId(Number(row.domain_id)),
     intentId: row.intent_id == null ? undefined : intendId(Number(row.intent_id)),
     sourceRef: asString(row.source_ref),
+    originKind: originKindFromRow(row.origin_kind),
+    unmandatedReason: asString(row.unmandated_reason),
     createdAt: asDate(row.created_at),
   };
 }
@@ -368,6 +376,13 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     const reportColumns = hasReports ? this.tableColumns("reports") : new Set<string>();
     const invocationSchemaCurrent = ["assumed_role", "invoked_skill_ref", "policy_ref"]
       .every((column) => actionColumns.has(column) && reportColumns.has(column));
+    const intentColumns = this.tableColumns("intents");
+    const originSchemaCurrent =
+      intentColumns.has("origin_kind") &&
+      this.tableColumns("interpretations").has("origin_kind") &&
+      actionColumns.has("origin_kind") &&
+      (!hasReports || reportColumns.has("origin_kind"));
+    const reportMandateSchemaCurrent = !hasReports || reportColumns.has("unmandated_reason");
     if (
       actorSchemaCurrent &&
       hasActorSessions &&
@@ -378,7 +393,9 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       hasContracts &&
       contractAuthoritySchemaCurrent &&
       actionAuthoritySchemaCurrent &&
-      invocationSchemaCurrent
+      invocationSchemaCurrent &&
+      originSchemaCurrent &&
+      reportMandateSchemaCurrent
     ) return;
 
     try {
@@ -398,6 +415,9 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       this.addColumnIfMissing("actions", "policy_ref", "policy_ref TEXT");
       this.addColumnIfMissing("actions", "domain_id", "domain_id INTEGER REFERENCES domains(id)");
       this.addColumnIfMissing("actions", "governing_contract_key", "governing_contract_key TEXT");
+      this.addColumnIfMissing("intents", "origin_kind", "origin_kind TEXT NOT NULL DEFAULT 'proxy'");
+      this.addColumnIfMissing("interpretations", "origin_kind", "origin_kind TEXT NOT NULL DEFAULT 'proxy'");
+      this.addColumnIfMissing("actions", "origin_kind", "origin_kind TEXT NOT NULL DEFAULT 'proxy'");
       this.db.exec("UPDATE actors SET created_at = COALESCE(created_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')), updated_at = COALESCE(updated_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))");
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS roles (
@@ -507,6 +527,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       this.addColumnIfMissing("reports", "assumed_role", "assumed_role TEXT");
       this.addColumnIfMissing("reports", "invoked_skill_ref", "invoked_skill_ref TEXT");
       this.addColumnIfMissing("reports", "policy_ref", "policy_ref TEXT");
+      this.addColumnIfMissing("reports", "origin_kind", "origin_kind TEXT NOT NULL DEFAULT 'proxy'");
+      this.addColumnIfMissing("reports", "unmandated_reason", "unmandated_reason TEXT");
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -516,22 +538,23 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
 
   async createIntent(
     intent: Omit<Intent, "id" | "version" | "createdAt" | "updatedAt" | "status"> & { status?: IntentStatus },
-    actor?: ActorId
+    callerActorId: ActorId
   ): Promise<Intent> {
     const result = this.db.prepare(
-      `INSERT INTO intents (scope, description, status, source, addressed_to, parent_id)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO intents (scope, description, status, source, origin_kind, addressed_to, parent_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(
       intent.scope,
       intent.description,
       intent.status ?? "draft",
       intent.source,
+      intent.originKind ?? "proxy",
       intent.addressedTo ?? null,
       intent.parentId ?? null
     );
     const created = await this.getIntent(intendId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted intent could not be read back");
-    await this.emitEvent("intent_created", "intents", created.id, requireActor(actor, "createIntent"), {
+    await this.emitEvent("intent_created", "intents", created.id, callerActorId, {
       scope: created.scope,
       snapshot: created as unknown as Record<string, unknown>,
     });
@@ -555,13 +578,15 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
 
   async updateIntent(
     id: IntentId,
-    updates: Partial<Omit<Intent, "id" | "createdAt">>,
+    updates: Partial<Omit<Intent, "id" | "createdAt" | "originKind">>,
     reason: string,
-    actor?: ActorId
+    callerActorId: ActorId
   ): Promise<Intent | RepositoryError> {
     const current = await this.getIntent(id);
     if (!current) return { code: "NOT_FOUND", message: `Intent ${id} not found` };
 
+    // origin_kind is deliberately absent from this whitelist and from the UPDATE statement
+    // below — it is a fact about how the record was emitted, not an editable field.
     const next = {
       status: updates.status ?? current.status,
       description: updates.description ?? current.description,
@@ -589,7 +614,7 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
 
     const updated = await this.getIntent(id);
     if (!updated) return { code: "NOT_FOUND", message: `Intent ${id} not found after update` };
-    await this.emitEvent("intent_updated", "intents", id, requireActor(actor, "updateIntent"), {
+    await this.emitEvent("intent_updated", "intents", id, callerActorId, {
       scope: updated.scope,
       reason,
       snapshot: updated as unknown as Record<string, unknown>,
@@ -625,12 +650,13 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     interpretation: Omit<Interpretation, "id" | "createdAt" | "updatedAt" | "status" | "alignment"> & {
       status?: InterpretationStatus;
       alignment?: InterpretationAlignment;
-    }
+    },
+    callerActorId: ActorId
   ): Promise<Interpretation> {
     const result = this.db.prepare(
       `INSERT INTO interpretations
-       (intent_id, domain_id, actor_id, title, scope_assumption, alignment, status, resolver_id, resolve_by, source_ref)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (intent_id, domain_id, actor_id, title, scope_assumption, alignment, status, resolver_id, resolve_by, source_ref, origin_kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       interpretation.intentId,
       interpretation.domainId,
@@ -641,11 +667,13 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       interpretation.status ?? "clarifying",
       interpretation.resolverId ?? null,
       toDbDate(interpretation.resolveBy),
-      interpretation.sourceRef ?? null
+      interpretation.sourceRef ?? null,
+      interpretation.originKind ?? "proxy"
     );
     const created = await this.getInterpretation(interpretationId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted interpretation could not be read back");
-    await this.emitEvent("interpretation_filed", "interpretations", created.id, created.actorId);
+    // Bug fix: this used to name created.actorId (the author) instead of the caller.
+    await this.emitEvent("interpretation_filed", "interpretations", created.id, callerActorId);
     return created;
   }
 
@@ -665,12 +693,14 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
 
   async updateInterpretation(
     id: InterpretationId,
-    updates: Partial<Omit<Interpretation, "id" | "createdAt" | "title">>,
+    updates: Partial<Omit<Interpretation, "id" | "createdAt" | "title" | "originKind">>,
     reason: string,
-    actor?: ActorId
+    callerActorId: ActorId
   ): Promise<Interpretation | RepositoryError> {
     const current = await this.getInterpretation(id);
     if (!current) return { code: "NOT_FOUND", message: `Interpretation ${id} not found` };
+    // origin_kind is deliberately absent from this UPDATE statement — it is a fact about
+    // how the record was emitted, not an editable field.
     this.db.prepare(
       `UPDATE interpretations
        SET status = ?, alignment = ?, resolver_id = ?, resolve_by = ?, superseded_by = ?,
@@ -688,7 +718,7 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     );
     const updated = await this.getInterpretation(id);
     if (!updated) return { code: "NOT_FOUND", message: `Interpretation ${id} not found after update` };
-    await this.emitEvent("interpretation_updated", "interpretations", id, actor ?? current.actorId, {
+    await this.emitEvent("interpretation_updated", "interpretations", id, callerActorId, {
       reason,
       snapshot: updated as unknown as Record<string, unknown>,
     });
@@ -699,26 +729,34 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     id: InterpretationId,
     newTitle: string,
     reason: string,
-    newScopeAssumption?: string,
-    newStatus?: InterpretationStatus
+    newScopeAssumption: string | undefined,
+    newStatus: InterpretationStatus | undefined,
+    callerActorId: ActorId,
+    replacementOriginKind: OriginKind
   ): Promise<{ old: Interpretation; replacement: Interpretation } | RepositoryError> {
     const current = await this.getInterpretation(id);
     if (!current) return { code: "NOT_FOUND", message: `Interpretation ${id} not found` };
 
     try {
       this.db.exec("BEGIN");
+      // The replacement row is authored by the actor performing the supersession, not the
+      // original author — it carries callerActorId and replacementOriginKind, never
+      // current.actorId or current.originKind. Attributing the replacement to the original
+      // author would violate the contract that records must never attribute work to an
+      // actor that did not author it.
       const result = this.db.prepare(
         `INSERT INTO interpretations
-         (intent_id, domain_id, actor_id, title, scope_assumption, alignment, status, source_ref)
-         VALUES (?, ?, ?, ?, ?, 'uncertain', ?, ?)`
+         (intent_id, domain_id, actor_id, title, scope_assumption, alignment, status, source_ref, origin_kind)
+         VALUES (?, ?, ?, ?, ?, 'uncertain', ?, ?, ?)`
       ).run(
         current.intentId,
         current.domainId,
-        current.actorId,
+        callerActorId,
         newTitle,
         newScopeAssumption ?? null,
         newStatus ?? "clarifying",
-        current.sourceRef ?? null
+        current.sourceRef ?? null,
+        replacementOriginKind
       );
       const replacementId = interpretationId(Number(result.lastInsertRowid));
       this.db.prepare(
@@ -729,8 +767,10 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       ).run(replacementId, id);
       this.db.exec("COMMIT");
 
-      await this.emitEvent("interpretation_superseded", "interpretations", id, current.actorId, { reason });
-      await this.emitEvent("interpretation_filed", "interpretations", replacementId, current.actorId);
+      // Bug fix: these two events used to name current.actorId (the original author)
+      // instead of callerActorId (whoever performed the supersession).
+      await this.emitEvent("interpretation_superseded", "interpretations", id, callerActorId, { reason });
+      await this.emitEvent("interpretation_filed", "interpretations", replacementId, callerActorId);
 
       const old = await this.getInterpretation(id);
       const replacement = await this.getInterpretation(replacementId);
@@ -771,12 +811,12 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(interpretationFromRow);
   }
 
-  async logAction(action: Omit<Action, "id" | "createdAt">): Promise<Action> {
+  async logAction(action: Omit<Action, "id" | "createdAt">, callerActorId: ActorId): Promise<Action> {
     const result = this.db.prepare(
       `INSERT INTO actions
        (intent_id, interpretation_id, actor_id, domain_id, governing_contract_key,
-        assumed_role, invoked_skill_ref, policy_ref, description, outcome)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        assumed_role, invoked_skill_ref, policy_ref, description, outcome, origin_kind)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       action.intentId,
       action.interpretationId ?? null,
@@ -787,11 +827,13 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       action.invokedSkillRef ?? null,
       action.policyRef ?? null,
       action.description,
-      action.outcome ?? null
+      action.outcome ?? null,
+      action.originKind ?? "proxy"
     );
     const created = await this.getAction(actionId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted action could not be read back");
-    await this.emitEvent("action_logged", "actions", created.id, created.actorId);
+    // Bug fix: this used to name created.actorId instead of the caller.
+    await this.emitEvent("action_logged", "actions", created.id, callerActorId);
     return created;
   }
 
@@ -829,17 +871,23 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(actionFromRow);
   }
 
-  async acquireClaim(entityTable: string, entityId: number, actor: ActorId, note?: string): Promise<Claim> {
+  async acquireClaim(
+    entityTable: string,
+    entityId: number,
+    actor: ActorId,
+    note: string | undefined,
+    callerActorId: ActorId
+  ): Promise<Claim> {
     const result = this.db.prepare(
       "INSERT INTO claims (entity_table, entity_id, actor_id, note) VALUES (?, ?, ?, ?)"
     ).run(entityTable, entityId, actor, note ?? null);
     const created = await this.getClaim(claimId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted claim could not be read back");
-    await this.emitEvent("claim_acquired", entityTable, entityId, actor, { reason: note });
+    await this.emitEvent("claim_acquired", entityTable, entityId, callerActorId, { reason: note });
     return created;
   }
 
-  async releaseClaim(id: ClaimId, reason?: string): Promise<void | RepositoryError> {
+  async releaseClaim(id: ClaimId, reason: string | undefined, callerActorId: ActorId): Promise<void | RepositoryError> {
     const current = await this.getClaim(id);
     if (!current) return { code: "NOT_FOUND", message: `Claim ${id} not found` };
     if (current.status === "released") {
@@ -848,7 +896,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     this.db.prepare(
       "UPDATE claims SET status = 'released', released_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?"
     ).run(id);
-    await this.emitEvent("claim_released", current.entityTable, current.entityId, current.actorId, { reason });
+    // Bug fix: this used to name current.actorId (the holder) instead of whoever released it.
+    await this.emitEvent("claim_released", current.entityTable, current.entityId, callerActorId, { reason });
   }
 
   async getClaim(id: ClaimId): Promise<Claim | null> {
@@ -876,12 +925,16 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(claimFromRow);
   }
 
-  async registerDomain(domain: Omit<Domain, "id">): Promise<Domain> {
+  async registerDomain(domain: Omit<Domain, "id">, callerActorId: ActorId): Promise<Domain> {
     const result = this.db.prepare(
       "INSERT INTO domains (scope, name, concern, notion_page_id) VALUES (?, ?, ?, ?)"
     ).run(domain.scope, domain.name, domain.concern, domain.notionPageId ?? null);
     const created = await this.getDomain(domainId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted domain could not be read back");
+    await this.emitEvent("domain_registered", "domains", created.id, callerActorId, {
+      scope: created.scope,
+      snapshot: created as unknown as Record<string, unknown>,
+    });
     return created;
   }
 
@@ -895,7 +948,7 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(domainFromRow);
   }
 
-  async registerContract(contract: ContractCreate): Promise<Contract | RepositoryError> {
+  async registerContract(contract: ContractCreate, callerActorId: ActorId): Promise<Contract | RepositoryError> {
     const existingOpen = this.db.prepare(
       "SELECT * FROM contracts WHERE key = ? AND status IN ('draft', 'active') ORDER BY version DESC LIMIT 1"
     ).get(contract.key) as Row | undefined;
@@ -930,7 +983,9 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     );
     const created = await this.getContract(contractId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted contract could not be read back");
-    await this.emitEvent("contract_registered", "contracts", created.id, created.custodianActorId, {
+    // Bug fix: this used to name created.custodianActorId (the custodian role) instead of
+    // the caller. The custodian remains recorded on the contract itself, unchanged.
+    await this.emitEvent("contract_registered", "contracts", created.id, callerActorId, {
       scope: created.scope,
       snapshot: contractEventSnapshot(created),
     });
@@ -996,7 +1051,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
   async supersedeContract(
     id: ContractId,
     replacement: ContractSupersedeInput,
-    reason: string
+    reason: string,
+    callerActorId: ActorId
   ): Promise<{ old: Contract; replacement: Contract } | RepositoryError> {
     const current = await this.getContract(id);
     if (!current) return { code: "NOT_FOUND", message: `Contract ${id} not found` };
@@ -1037,12 +1093,14 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       const old = await this.getContract(id);
       const replacementContract = await this.getContract(replacementId);
       if (!old || !replacementContract) return { code: "INVALID_STATE", message: "Contract supersession readback failed" };
-      await this.emitEvent("contract_superseded", "contracts", id, replacement.custodianActorId, {
+      // Bug fix: these two events used to name replacement.custodianActorId (the custodian
+      // role) instead of the caller. The custodian remains recorded on the contract, unchanged.
+      await this.emitEvent("contract_superseded", "contracts", id, callerActorId, {
         scope: current.scope,
         reason,
         snapshot: contractEventSnapshot(old),
       });
-      await this.emitEvent("contract_registered", "contracts", replacementId, replacement.custodianActorId, {
+      await this.emitEvent("contract_registered", "contracts", replacementId, callerActorId, {
         scope: replacementContract.scope,
         snapshot: contractEventSnapshot(replacementContract),
       });
@@ -1053,34 +1111,59 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     }
   }
 
-  async registerActor(actor: ActorCreate): Promise<Actor> {
-    const result = this.db.prepare(
-      `INSERT INTO actors
-       (name, role, provider, actor_type, capability_namespace, session_id, default_scope, status,
-        contract_key, default_contract_key, contract_ref, context_ref, context_policy, description)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      actor.name,
-      actor.role,
-      actor.provider,
-      actor.actorType ?? null,
-      actor.capabilityNamespace,
-      actor.sessionId ?? null,
-      actor.defaultScope,
-      actor.status ?? "active",
-      actor.contractKey ?? null,
-      actor.defaultContractKey ?? null,
-      actor.contractRef ?? null,
-      actor.contextRef ?? null,
-      actor.contextPolicy ?? null,
-      actor.description ?? null
-    );
-    const created = await this.getActor(actorId(Number(result.lastInsertRowid)));
-    if (!created) throw new Error("Inserted actor could not be read back");
-    return created;
+  async registerActor(actor: ActorCreate, callerActorId: ActorId | "self"): Promise<Actor> {
+    // Insert and self-attribution resolution happen in one transaction: the caller
+    // parameter accepts the sentinel "self" for the one case where no other actor can
+    // truthfully be named as the cause of an actor's own registration (the first actor
+    // in a brand-new database). Predicting that id ahead of the insert and asserting the
+    // prediction (the previous approach, formerly done by the CLI) left a window between
+    // a committed actor row and its event where a crash or FK failure could leave an
+    // actor with zero events, permanently and silently. Resolving the real id from the
+    // insert's own result — inside BEGIN/COMMIT, matching supersedeContract's idiom —
+    // removes both the prediction and the window: either both rows land, or neither does.
+    try {
+      this.db.exec("BEGIN");
+      const result = this.db.prepare(
+        `INSERT INTO actors
+         (name, role, provider, actor_type, capability_namespace, session_id, default_scope, status,
+          contract_key, default_contract_key, contract_ref, context_ref, context_policy, description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        actor.name,
+        actor.role,
+        actor.provider,
+        actor.actorType ?? null,
+        actor.capabilityNamespace,
+        actor.sessionId ?? null,
+        actor.defaultScope,
+        actor.status ?? "active",
+        actor.contractKey ?? null,
+        actor.defaultContractKey ?? null,
+        actor.contractRef ?? null,
+        actor.contextRef ?? null,
+        actor.contextPolicy ?? null,
+        actor.description ?? null
+      );
+      const created = await this.getActor(actorId(Number(result.lastInsertRowid)));
+      if (!created) throw new Error("Inserted actor could not be read back");
+      const resolvedCallerId = callerActorId === "self" ? created.id : callerActorId;
+      await this.emitEvent("actor_registered", "actors", created.id, resolvedCallerId, {
+        scope: created.defaultScope,
+        snapshot: created as unknown as Record<string, unknown>,
+      });
+      this.db.exec("COMMIT");
+      return created;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
-  async updateActor(id: ActorId, updates: Partial<Omit<Actor, "id" | "createdAt">>): Promise<Actor | RepositoryError> {
+  async updateActor(
+    id: ActorId,
+    updates: Partial<Omit<Actor, "id" | "createdAt">>,
+    callerActorId: ActorId
+  ): Promise<Actor | RepositoryError> {
     const current = await this.getActor(id);
     if (!current) return { code: "NOT_FOUND", message: `Actor ${id} not found` };
     this.db.prepare(
@@ -1108,6 +1191,10 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     );
     const updated = await this.getActor(id);
     if (!updated) return { code: "NOT_FOUND", message: `Actor ${id} not found after update` };
+    await this.emitEvent("actor_updated", "actors", id, callerActorId, {
+      scope: updated.defaultScope,
+      snapshot: updated as unknown as Record<string, unknown>,
+    });
     return updated;
   }
 
@@ -1137,7 +1224,7 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(actorFromRow);
   }
 
-  async registerRole(role: GovernanceRoleCreate): Promise<GovernanceRole> {
+  async registerRole(role: GovernanceRoleCreate, callerActorId: ActorId): Promise<GovernanceRole> {
     const result = this.db.prepare(
       `INSERT INTO roles (name, status, contract_key, contract_ref, context_ref, policy_ref, description)
        VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1160,6 +1247,9 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     );
     const created = await this.getRoleByName(role.name);
     if (!created) throw new Error("Inserted role could not be read back");
+    await this.emitEvent("role_registered", "roles", created.id, callerActorId, {
+      snapshot: created as unknown as Record<string, unknown>,
+    });
     return created;
   }
 
@@ -1185,7 +1275,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(roleFromRow);
   }
 
-  async bindActorRole(binding: ActorRoleBindingCreate): Promise<ActorRoleBinding> {
+  // callerActorId: reserved, currently unused — this method emits no event yet.
+  async bindActorRole(binding: ActorRoleBindingCreate, callerActorId: ActorId): Promise<ActorRoleBinding> {
     this.db.prepare(
       `INSERT INTO actor_role_bindings (actor_id, role_id, surface, provider, credential_ref, status)
        VALUES (?, ?, ?, ?, ?, ?)
@@ -1238,7 +1329,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(actorRoleBindingFromRow);
   }
 
-  async openActorSession(session: ActorSessionCreate): Promise<ActorSession> {
+  // callerActorId: reserved, currently unused — this method emits no event yet.
+  async openActorSession(session: ActorSessionCreate, callerActorId: ActorId): Promise<ActorSession> {
     const result = this.db.prepare(
       `INSERT INTO actor_sessions
        (actor_id, session_ref, surface, provider, status, transcript_ref)
@@ -1265,7 +1357,12 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return actorSessionFromRow(row);
   }
 
-  async heartbeatActorSession(sessionRef: string, actor: ActorId): Promise<ActorSession | RepositoryError> {
+  // callerActorId: reserved, currently unused — this method emits no event yet.
+  async heartbeatActorSession(
+    sessionRef: string,
+    actor: ActorId,
+    callerActorId: ActorId
+  ): Promise<ActorSession | RepositoryError> {
     const current = this.db.prepare(
       "SELECT * FROM actor_sessions WHERE actor_id = ? AND session_ref = ? AND status = 'active'"
     ).get(actor, sessionRef) as Row | undefined;
@@ -1278,7 +1375,12 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return actorSessionFromRow(updated);
   }
 
-  async closeActorSession(sessionRef: string, actor: ActorId): Promise<ActorSession | RepositoryError> {
+  // callerActorId: reserved, currently unused — this method emits no event yet.
+  async closeActorSession(
+    sessionRef: string,
+    actor: ActorId,
+    callerActorId: ActorId
+  ): Promise<ActorSession | RepositoryError> {
     const current = this.db.prepare(
       "SELECT * FROM actor_sessions WHERE actor_id = ? AND session_ref = ? AND status = 'active'"
     ).get(actor, sessionRef) as Row | undefined;
@@ -1311,8 +1413,20 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(actorSessionFromRow);
   }
 
-  async registerScope(scope: string): Promise<string> {
-    this.db.prepare("INSERT OR IGNORE INTO scopes (name, description) VALUES (?, ?)").run(scope, scope);
+  async registerScope(scope: string, callerActorId: ActorId): Promise<string> {
+    const result = this.db.prepare("INSERT OR IGNORE INTO scopes (name, description) VALUES (?, ?)").run(scope, scope);
+    // changes === 0 means the row already existed (INSERT OR IGNORE was a no-op) —
+    // matches the in-memory implementation's re-registration-is-a-no-op behaviour, and
+    // avoids emitting a scope_registered event (with a fabricated id) for a scope that
+    // isn't actually new.
+    if (result.changes > 0) {
+      const row = this.db.prepare("SELECT id FROM scopes WHERE name = ?").get(scope) as Row | undefined;
+      if (!row) throw new Error("Inserted scope could not be read back");
+      await this.emitEvent("scope_registered", "scopes", Number(row.id), callerActorId, {
+        scope,
+        snapshot: { scope },
+      });
+    }
     return scope;
   }
 
@@ -1322,7 +1436,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
   }
 
   async registerExpertiseSignal(
-    signal: Omit<ExpertiseSignalRecord, "id" | "createdAt">
+    signal: Omit<ExpertiseSignalRecord, "id" | "createdAt">,
+    callerActorId: ActorId
   ): Promise<ExpertiseSignalRecord> {
     const result = this.db.prepare(
       "INSERT INTO expertise_signals (intent_id, domain_id, actor_id, signal, note) VALUES (?, ?, ?, ?, ?)"
@@ -1330,7 +1445,8 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     const row = this.db.prepare("SELECT * FROM expertise_signals WHERE id = ?").get(result.lastInsertRowid) as Row | undefined;
     if (!row) throw new Error("Inserted expertise signal could not be read back");
     const created = expertiseFromRow(row);
-    await this.emitEvent("expertise_signal_registered", "expertise_signals", created.id, created.actorId);
+    // Bug fix: this used to name created.actorId instead of the caller.
+    await this.emitEvent("expertise_signal_registered", "expertise_signals", created.id, callerActorId);
     return created;
   }
 
@@ -1340,11 +1456,11 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(expertiseFromRow);
   }
 
-  async registerReport(report: ReportCreate): Promise<Report> {
+  async registerReport(report: ReportCreate, callerActorId: ActorId): Promise<Report> {
     const result = this.db.prepare(
       `INSERT INTO reports
-       (scope, kind, title, summary, body_ref, actor_id, assumed_role, invoked_skill_ref, policy_ref, domain_id, intent_id, source_ref)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (scope, kind, title, summary, body_ref, actor_id, assumed_role, invoked_skill_ref, policy_ref, domain_id, intent_id, source_ref, origin_kind, unmandated_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       report.scope,
       report.kind,
@@ -1357,11 +1473,14 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
       report.policyRef ?? null,
       report.domainId ?? null,
       report.intentId ?? null,
-      report.sourceRef ?? null
+      report.sourceRef ?? null,
+      report.originKind ?? "proxy",
+      report.unmandatedReason ?? null
     );
     const created = await this.getReport(reportId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted report could not be read back");
-    await this.emitEvent("report_created", "reports", created.id, created.actorId, {
+    // Bug fix: this used to name created.actorId instead of the caller.
+    await this.emitEvent("report_created", "reports", created.id, callerActorId, {
       scope: created.scope,
       snapshot: created as unknown as Record<string, unknown>,
     });

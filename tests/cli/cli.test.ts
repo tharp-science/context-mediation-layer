@@ -698,6 +698,21 @@ if (command === "create") {
     expect(created.data.originKind).toBe("proxy");
   });
 
+  it("stamps direct origin from CML_ORIGIN when no --origin flag is passed", () => {
+    const output = execFileSync(
+      "node",
+      ["dist/cli/index.js", "--db", dbPath, "--actor-id", "22", "intent", "create", "--description", "d", "--source", "s"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: { ...process.env, CML_OBSIDIAN_BIN: obsidianBin, FAKE_OBSIDIAN_ROOT: fakeVaultRoot, CML_ORIGIN: "direct" },
+      }
+    );
+    const created = JSON.parse(output);
+    expect(created.ok).toBe(true);
+    expect(created.data.originKind).toBe("direct");
+  });
+
   it("accepts --key=value flags", () => {
     const created = cli(["intent", "create", "--description=Equals intent", "--source=test"]);
     expect(created.ok).toBe(true);

@@ -18,7 +18,8 @@
     "test:contracts": "vitest run tests/contracts",
     "oauth:bootstrap": "node scripts/bootstrap-oauth.mjs",
     "smoke:local": "node scripts/local-smoke.mjs",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "typecheck:tests": "tsc --noEmit -p tsconfig.tests.json"
   },
   "engines": {
     "node": ">=22.5"

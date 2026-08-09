@@ -30,7 +30,7 @@ describe("InMemoryGovernanceRepository", () => {
       description: "Test intent",
       status: "draft",
       source: "test",
-    });
+    }, actorId(1));
 
     expect(intent.description).toBe("Test intent");
     expect(intent.status).toBe("draft");
@@ -46,9 +46,9 @@ describe("InMemoryGovernanceRepository", () => {
       description: "Versioned intent",
       status: "draft",
       source: "test",
-    });
+    }, actorId(1));
 
-    const updated = await repo.updateIntent(intent.id, { status: "active" }, "activating intent");
+    const updated = await repo.updateIntent(intent.id, { status: "active" }, "activating intent", actorId(1));
 
     if (typeof updated === "object" && "code" in updated) {
       throw new Error("Expected Intent, got error");
@@ -63,7 +63,7 @@ describe("InMemoryGovernanceRepository", () => {
       description: "Intent for interpretation",
       status: "active",
       source: "test",
-    });
+    }, actorId(1));
 
     await repo.createInterpretation({
       intentId: intent.id,
@@ -72,7 +72,7 @@ describe("InMemoryGovernanceRepository", () => {
       title: "Test interpretation",
       alignment: "uncertain",
       status: "clarifying",
-    });
+    }, actorId(1));
 
     const listed = await repo.listInterpretations({ intentId: intent.id });
     expect(listed).toHaveLength(1);
@@ -85,7 +85,7 @@ describe("InMemoryGovernanceRepository", () => {
       description: "Intent",
       status: "active",
       source: "test",
-    });
+    }, actorId(1));
 
     const interp = await repo.createInterpretation({
       intentId: intent.id,
@@ -94,12 +94,12 @@ describe("InMemoryGovernanceRepository", () => {
       title: "Interpretation",
       alignment: "uncertain",
       status: "clarifying",
-    });
+    }, actorId(1));
 
     // The repository allows any valid status value; no transition enforcement.
     const result = await repo.updateInterpretation(interp.id, {
       status: "proposed",
-    }, "changing to proposed");
+    }, "changing to proposed", actorId(1));
 
     if (typeof result === "object" && "code" in result) {
       throw new Error("Expected Interpretation, got error");
@@ -113,28 +113,28 @@ describe("InMemoryGovernanceRepository", () => {
       description: "Intent",
       status: "active",
       source: "test",
-    });
+    }, actorId(1));
 
     const action = await repo.logAction({
       intentId: intent.id,
       actorId: actorId(1),
       description: "Did something",
-    });
+    }, actorId(1));
 
     const retrieved = await repo.getAction(action.id);
     expect(retrieved?.description).toBe("Did something");
   });
 
   it("handles claim lifecycle (advisory, not exclusive)", async () => {
-    const claim = await repo.acquireClaim("intents", 1, actorId(1), "Working on it");
+    const claim = await repo.acquireClaim("intents", 1, actorId(1), "Working on it", actorId(1));
     expect(claim.status).toBe("active");
 
     // Multiple actors can claim the same entity
-    const claim2 = await repo.acquireClaim("intents", 1, actorId(2), "Also working on it");
+    const claim2 = await repo.acquireClaim("intents", 1, actorId(2), "Also working on it", actorId(2));
     expect(claim2.status).toBe("active");
 
     // Release the first claim
-    const releaseResult = await repo.releaseClaim(claim.id, "Done");
+    const releaseResult = await repo.releaseClaim(claim.id, "Done", actorId(1));
     expect(releaseResult).toBeUndefined();
 
     const retrieved = await repo.getClaim(claim.id);
@@ -172,13 +172,13 @@ describe("Governance store updates", () => {
       scope: "default",
       description: "Governance update test intent",
       source: "test",
-    });
+    }, actorId(1));
     const interp = await repo.createInterpretation({
       intentId: intent.id,
       domainId: domainId(1),
       actorId: actorId(1),
       title: "Original interpretation",
-    });
+    }, actorId(1));
     return { intent, interp };
   }
 
@@ -195,7 +195,8 @@ describe("Governance store updates", () => {
       const result = await repo.updateInterpretation(
         interp.id,
         { status: "proposed" } as any, // only valid fields
-        "changing status"
+        "changing status",
+        actorId(1)
       );
 
       if ("code" in result) throw new Error("Expected Interpretation");
@@ -251,7 +252,10 @@ describe("Governance store updates", () => {
       const result = await repo.supersedeInterpretation(
         interp.id,
         "Revised interpretation",
-        "original was incomplete"
+        "original was incomplete",
+        undefined,
+        undefined,
+        actorId(1)
       );
 
       if ("code" in result) throw new Error("Expected supersession result");
@@ -275,7 +279,10 @@ describe("Governance store updates", () => {
       const result = await repo.supersedeInterpretation(
         interpretationId(999),
         "Doesn't matter",
-        "no reason"
+        "no reason",
+        undefined,
+        undefined,
+        actorId(1)
       );
       expect("code" in result && result.code).toBe("NOT_FOUND");
     });
@@ -283,7 +290,7 @@ describe("Governance store updates", () => {
     it("supersede emits events for both old and new", async () => {
       const { interp } = await seedInterpretation();
 
-      await repo.supersedeInterpretation(interp.id, "New title", "reason");
+      await repo.supersedeInterpretation(interp.id, "New title", "reason", undefined, undefined, actorId(1));
 
       const events = await repo.listEvents({ entityTable: "interpretations" });
       const types = events.map((e) => e.eventType);
@@ -303,7 +310,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Alignment test",
         source: "test",
-      });
+      }, actorId(1));
 
       await repo.createInterpretation({
         intentId: intent.id,
@@ -312,7 +319,7 @@ describe("Governance store updates", () => {
         title: "Aligned view",
         alignment: "aligned",
         status: "proposed",
-      });
+      }, actorId(1));
 
       await repo.createInterpretation({
         intentId: intent.id,
@@ -321,7 +328,7 @@ describe("Governance store updates", () => {
         title: "Divergent view",
         alignment: "divergent",
         status: "proposed",
-      });
+      }, actorId(2));
 
       const divergent = await repo.listInterpretations({ alignment: "divergent" });
       expect(divergent).toHaveLength(1);
@@ -343,7 +350,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "No status provided",
         source: "test",
-      });
+      }, actorId(1));
       expect(intent.status).toBe("draft");
     });
 
@@ -353,7 +360,7 @@ describe("Governance store updates", () => {
         description: "Explicit active",
         status: "active",
         source: "test",
-      });
+      }, actorId(1));
       expect(intent.status).toBe("active");
     });
 
@@ -362,14 +369,14 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Defaults test",
         source: "test",
-      });
+      }, actorId(1));
 
       const interp = await repo.createInterpretation({
         intentId: intent.id,
         domainId: domainId(1),
         actorId: actorId(1),
         title: "No status or alignment",
-      });
+      }, actorId(1));
 
       expect(interp.status).toBe("clarifying");
       expect(interp.alignment).toBe("uncertain");
@@ -380,7 +387,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Override test",
         source: "test",
-      });
+      }, actorId(1));
 
       const interp = await repo.createInterpretation({
         intentId: intent.id,
@@ -389,7 +396,7 @@ describe("Governance store updates", () => {
         title: "Explicit values",
         status: "proposed",
         alignment: "aligned",
-      });
+      }, actorId(1));
 
       expect(interp.status).toBe("proposed");
       expect(interp.alignment).toBe("aligned");
@@ -406,7 +413,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Enriched read test",
         source: "test",
-      });
+      }, actorId(1));
 
       // Add two interpretations
       await repo.createInterpretation({
@@ -414,13 +421,13 @@ describe("Governance store updates", () => {
         domainId: domainId(1),
         actorId: actorId(1),
         title: "Interp 1",
-      });
+      }, actorId(1));
       await repo.createInterpretation({
         intentId: intent.id,
         domainId: domainId(2),
         actorId: actorId(2),
         title: "Interp 2",
-      });
+      }, actorId(2));
 
       // Add expertise signal
       await repo.registerExpertiseSignal({
@@ -428,10 +435,10 @@ describe("Governance store updates", () => {
         domainId: domainId(1),
         actorId: actorId(1),
         signal: "concerned",
-      });
+      }, actorId(1));
 
       // Add claim
-      await repo.acquireClaim("intents", intent.id, actorId(1), "working");
+      await repo.acquireClaim("intents", intent.id, actorId(1), "working", actorId(1));
 
       const enriched = await repo.getIntent(intent.id);
       expect(enriched).not.toBeNull();
@@ -446,21 +453,21 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Linked read test",
         source: "test",
-      });
+      }, actorId(1));
 
       const interp = await repo.createInterpretation({
         intentId: intent.id,
         domainId: domainId(1),
         actorId: actorId(1),
         title: "With actions",
-      });
+      }, actorId(1));
 
       await repo.logAction({
         intentId: intent.id,
         interpretationId: interp.id,
         actorId: actorId(1),
         description: "Action linked to interp",
-      });
+      }, actorId(1));
 
       const enriched = await repo.getInterpretation(interp.id);
       expect(enriched).not.toBeNull();
@@ -480,14 +487,14 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Parent directive",
         source: "test",
-      });
+      }, actorId(1));
 
       const child = await repo.createIntent({
         scope: "default",
         description: "Sub-intent delegation",
         source: "test",
         parentId: parent.id,
-      });
+      }, actorId(1));
 
       expect(child.parentId).toBe(parent.id);
     });
@@ -497,7 +504,7 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Top-level",
         source: "test",
-      });
+      }, actorId(1));
 
       expect(intent.parentId).toBeUndefined();
     });
@@ -507,14 +514,14 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Parent",
         source: "test",
-      });
+      }, actorId(1));
 
       await repo.createIntent({
         scope: "default",
         description: "Child",
         source: "test",
         parentId: parent.id,
-      });
+      }, actorId(1));
 
       const topLevel = await repo.listIntents({ parentId: null });
       expect(topLevel.every((i) => i.parentId == null)).toBe(true);
@@ -526,14 +533,14 @@ describe("Governance store updates", () => {
         scope: "default",
         description: "Parent",
         source: "test",
-      });
+      }, actorId(1));
 
       const child = await repo.createIntent({
         scope: "default",
         description: "Child of parent",
         source: "test",
         parentId: parent.id,
-      });
+      }, actorId(1));
 
       const children = await repo.listIntents({ parentId: parent.id });
       expect(children).toHaveLength(1);

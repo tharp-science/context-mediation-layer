@@ -36,14 +36,14 @@ describe("inspectIntent", () => {
       scope: "default",
       name: "Runtime Ops",
       concern: "Server operations",
-    });
+    }, actorId(0));
     const actor = await repo.registerActor({
       name: "ops-agent",
       role: "agent",
       provider: "claude-code",
       capabilityNamespace: "runtime.invoke",
       defaultScope: "default",
-    });
+    }, actorId(0));
 
     // Two interpretations
     const interp1 = await service.registerInterpretation({
@@ -198,7 +198,7 @@ describe("inspectInterpretation", () => {
       scope: "default",
       name: "Diagnostics",
       concern: "Health checks",
-    });
+    }, actorId(0));
 
     const interpRes = await service.registerInterpretation({
       intentId: intentRes.data.id as number,
@@ -259,7 +259,7 @@ describe("inspectInterpretation", () => {
       scope: "default",
       name: "Test",
       concern: "Testing",
-    });
+    }, actorId(0));
 
     const interpRes = await service.registerInterpretation({
       intentId: intentRes.data.id as number,
@@ -414,7 +414,7 @@ describe("inspectIntentTree", () => {
       scope: "default",
       name: "Ops",
       concern: "Operations",
-    });
+    }, actorId(0));
 
     // File interpretation on child
     await service.registerInterpretation({

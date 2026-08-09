@@ -371,7 +371,7 @@ describe("GovernanceService", () => {
         provider: "test",
         capabilityNamespace: "test",
         defaultScope: "default",
-      });
+      }, actorId(0));
       await repo.createIntent(
         { description: "History test", source: "test", scope: "default" },
         actor.id
@@ -913,7 +913,7 @@ describe("GovernanceService", () => {
         scope: "default",
         name: "Framework Build",
         concern: "Building the framework",
-      });
+      }, actorId(0));
 
       const get = await service.getDomain(domain.id);
       expect(get.ok).toBe(true);

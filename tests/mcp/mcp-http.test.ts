@@ -51,25 +51,25 @@ if (command === "create") {
     chmodSync(obsidianBin, 0o755);
 
     repo = new InMemoryGovernanceRepository();
-    await repo.registerScope("default");
+    await repo.registerScope("default", actorId(0));
     await repo.registerActor({
       name: "mcp-http-agent",
       role: "agent",
       provider: "openai-codex",
       capabilityNamespace: "mcp-http-test",
       defaultScope: "default",
-    });
+    }, actorId(0));
     await repo.registerDomain({
       name: "test-domain",
       scope: "default",
       concern: "MCP HTTP interpretation reads",
-    });
+    }, actorId(1));
     await repo.createIntent({
       scope: "default",
       description: "MCP HTTP mandate",
       source: "test",
       status: "active",
-    });
+    }, actorId(1));
 
     server = createCmlMcpHttpServer({
       repository: repo,
@@ -194,7 +194,7 @@ if (command === "create") {
       alignment: "aligned",
       status: "proposed",
       sourceRef: "test",
-    });
+    }, actorId(1));
 
     const list = await post({
       jsonrpc: "2.0",

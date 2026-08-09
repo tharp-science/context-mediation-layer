@@ -130,19 +130,19 @@ describe("operator UI runtime", () => {
 
 async function fixture() {
   const repo = new InMemoryGovernanceRepository();
-  await repo.registerScope("default");
+  await repo.registerScope("default", actorId(0));
   await repo.registerActor({
     name: "runtime-agent",
     role: "agent",
     provider: "openai-codex",
     capabilityNamespace: "runtime-test",
     defaultScope: "default",
-  });
+  }, actorId(0));
   await repo.registerDomain({
     name: "framework",
     scope: "default",
     concern: "runtime projection",
-  });
+  }, actorId(1));
   await repo.createIntent({
     scope: "default",
     description: "Resolve operator sidebar divergence",
@@ -156,7 +156,7 @@ async function fixture() {
     title: "Divergent reading A",
     status: "flagged",
     alignment: "divergent",
-  });
+  }, actorId(1));
   await repo.createInterpretation({
     intentId: intendId(1),
     domainId: domainId(1),
@@ -164,7 +164,7 @@ async function fixture() {
     title: "Divergent reading B",
     status: "proposed",
     alignment: "divergent",
-  });
+  }, actorId(1));
   await repo.createInterpretation({
     intentId: intendId(1),
     domainId: domainId(1),
@@ -172,7 +172,7 @@ async function fixture() {
     title: "Old reading",
     status: "proposed",
     alignment: "uncertain",
-  });
-  await repo.supersedeInterpretation(interpretationId(3), "Replacement reading", "Runtime test");
+  }, actorId(1));
+  await repo.supersedeInterpretation(interpretationId(3), "Replacement reading", "Runtime test", undefined, undefined, actorId(1));
   return { repo, service: new GovernanceService(repo) };
 }

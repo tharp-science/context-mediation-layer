@@ -12,25 +12,25 @@ describe("cml-ui HTTP surface", () => {
 
   beforeEach(async () => {
     repo = new InMemoryGovernanceRepository();
-    await repo.registerScope("default");
+    await repo.registerScope("default", actorId(0));
     await repo.registerActor({
       name: "ui-operator",
-      role: "operator",
+      role: "human",
       provider: "test",
       capabilityNamespace: "ui-test",
       defaultScope: "default",
-    });
+    }, actorId(0));
     await repo.registerDomain({
       name: "framework",
       scope: "default",
       concern: "operator legibility",
-    });
+    }, actorId(1));
     await repo.createIntent({
       scope: "default",
       description: "Build an operator surface",
       source: "test",
       status: "active",
-    });
+    }, actorId(1));
     await repo.createInterpretation({
       intentId: intendId(1),
       domainId: domainId(1),
@@ -40,7 +40,7 @@ describe("cml-ui HTTP surface", () => {
       status: "proposed",
       alignment: "aligned",
       sourceRef: "test",
-    });
+    }, actorId(1));
 
     server = createCmlUiServer({
       repository: repo,

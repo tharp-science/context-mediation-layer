@@ -58,7 +58,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
       title: "SSH to server, check outbox for completed run files",
       status: "proposed",
       alignment: "aligned",
-    });
+    }, actorId(1));
 
     return { intent, interp };
   }
@@ -293,7 +293,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
       title: "Belongs to other intent",
       status: "proposed",
       alignment: "aligned",
-    });
+    }, actorId(1));
 
     const result = await orchestrator.executeStep({
       intentId: intent.id,
@@ -315,7 +315,10 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
     await repo.supersedeInterpretation(
       interp.id,
       "Updated understanding",
-      "Original was wrong"
+      "Original was wrong",
+      undefined,
+      undefined,
+      actorId(1)
     );
 
     const result = await orchestrator.executeStep({
@@ -408,7 +411,7 @@ describe("Vertical Slice: Governance → Runtime → Fold-back", () => {
       title: "Run deploy script against staging cluster",
       status: "proposed",
       alignment: "aligned",
-    });
+    }, actorId(2));
 
     const result = await orchestrator.executeStep({
       intentId: intent.id,

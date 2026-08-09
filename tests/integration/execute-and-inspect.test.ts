@@ -39,7 +39,7 @@ describe("executeAndInspect", () => {
       scope: "default",
       name: "Operations",
       concern: "Infrastructure health",
-    });
+    }, actorId(0));
 
     const actor = await repo.registerActor({
       name: "health-agent",
@@ -47,7 +47,7 @@ describe("executeAndInspect", () => {
       provider: "claude-code",
       capabilityNamespace: "runtime.invoke",
       defaultScope: "default",
-    });
+    }, actorId(0));
 
     const interpRes = await service.registerInterpretation({
       intentId: intentRes.data.id as number,

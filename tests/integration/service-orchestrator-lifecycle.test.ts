@@ -17,6 +17,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { InMemoryGovernanceRepository } from "../../src/governance/repository.js";
+import { actorId } from "../../src/governance/domain.js";
 import { GovernanceService } from "../../src/governance/service.js";
 import { ExecutionOrchestrator } from "../../src/orchestration/execution-orchestrator.js";
 import { FakeAgentRuntime } from "../fakes/fake-agent-runtime.js";
@@ -68,7 +69,7 @@ describe("Service → Orchestrator Lifecycle", () => {
       scope: "default",
       name: "Runtime Operations",
       concern: "Execution of agent tasks against external systems",
-    });
+    }, actorId(0));
 
     // 3. File interpretation through GovernanceService
     const interpRes = await service.registerInterpretation({
@@ -195,7 +196,7 @@ describe("Service → Orchestrator Lifecycle", () => {
       scope: "default",
       name: "Diagnostics",
       concern: "System health checks",
-    });
+    }, actorId(0));
 
     const interpRes = await service.registerInterpretation({
       intentId: intentRes.data.id as number,
@@ -359,7 +360,7 @@ describe("Service → Orchestrator Lifecycle", () => {
       scope: "consulting",
       name: "Client Delivery",
       concern: "On-time client output",
-    });
+    }, actorId(0));
 
     const interpRes = await service.registerInterpretation({
       intentId: intentRes.data.id as number,

@@ -56,14 +56,14 @@ if (command === "create") {
     chmodSync(obsidianBin, 0o755);
 
     repo = new InMemoryGovernanceRepository();
-    await repo.registerScope("default");
+    await repo.registerScope("default", actorId(0));
     await repo.registerActor({
       name: "mcp-agent",
       role: "agent",
       provider: "openai-codex",
       capabilityNamespace: "mcp-test",
       defaultScope: "default",
-    });
+    }, actorId(0));
     server = new CmlMcpServer({
       repository: repo,
       defaultActor: "mcp-agent",
@@ -122,14 +122,14 @@ if (command === "create") {
       name: "kinkscapes-collaborator",
       contractKey: "role:kinkscapes-collaborator",
       description: "Role-bound collaborator profile.",
-    });
+    }, actorId(1));
     const binding = await repo.bindActorRole({
       actorId: actorId(1),
       roleId: role.id,
       surface: "grok-mcp",
       provider: "xai-grok",
       credentialRef: "oauth-client:grok-kinkscapes",
-    });
+    }, actorId(1));
 
     const actors = await server.handle({
       jsonrpc: "2.0",
@@ -219,7 +219,7 @@ if (command === "create") {
       name: "framework",
       scope: "default",
       concern: "MCP operator testing",
-    });
+    }, actorId(1));
     await repo.createIntent({
       scope: "default",
       description: "Existing MCP operator intent",
@@ -550,7 +550,7 @@ if (command === "create") {
       scope: "default",
       description: "MCP vault mandate",
       source: "test",
-    });
+    }, actorId(1));
 
     const response = await server.handle({
       jsonrpc: "2.0",
@@ -622,7 +622,7 @@ if (command === "create") {
       scope: "default",
       description: "MCP append mandate",
       source: "test",
-    });
+    }, actorId(1));
     const response = await server.handle({
       jsonrpc: "2.0",
       id: 6,

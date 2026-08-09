@@ -176,7 +176,7 @@ export class GovernanceService {
     addressedTo?: number;
     parentId?: number;
     status?: IntentStatus;
-    actorId?: number;
+    callerActorId: number;
   }): Promise<ServiceResponse<Intent>> {
     const intent = await this.repo.createIntent(
       {
@@ -189,9 +189,8 @@ export class GovernanceService {
         status: params.status,
       },
       // Actor attribution is the writer of the governance event, not the optional addressed
-      // recipient. params.actorId stays optional here — Task 5/6 formalize callerActorId
-      // across the service — but every current call site (CLI, UI, SDK) already supplies it.
-      toActorId(params.actorId as number)
+      // recipient.
+      toActorId(params.callerActorId)
     );
     return success(intent);
   }
@@ -209,7 +208,7 @@ export class GovernanceService {
     description?: string;
     resolutionNotes?: string;
     addressedTo?: number;
-    actorId?: number;
+    callerActorId: number;
   }): Promise<ServiceResponse<Intent>> {
     const updates: Record<string, unknown> = {};
     if (params.status != null) updates.status = params.status;
@@ -221,9 +220,7 @@ export class GovernanceService {
       intendId(params.id),
       updates,
       params.reason,
-      // params.actorId stays optional here — Task 5/6 formalize callerActorId across the
-      // service — but every current call site (CLI, UI, SDK) already supplies it.
-      toActorId(params.actorId as number)
+      toActorId(params.callerActorId)
     );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
@@ -272,7 +269,7 @@ export class GovernanceService {
   async registerInterpretation(params: {
     intentId: number;
     domainId: number;
-    actorId: number;
+    callerActorId: number;
     title: string;
     scopeAssumption?: string;
     status?: InterpretationStatus;
@@ -284,7 +281,9 @@ export class GovernanceService {
     const interp = await this.repo.createInterpretation({
       intentId: intendId(params.intentId),
       domainId: toDomainId(params.domainId),
-      actorId: toActorId(params.actorId),
+      // The caller is also the record's author — origin_kind, not a second actor column,
+      // is what records an agent filing on someone else's behalf.
+      actorId: toActorId(params.callerActorId),
       title: params.title,
       scopeAssumption: params.scopeAssumption,
       status: params.status,
@@ -293,7 +292,7 @@ export class GovernanceService {
       resolverId: params.resolverId != null ? toActorId(params.resolverId) : undefined,
       resolveBy: params.resolveBy ? new Date(params.resolveBy) : undefined,
       originKind: this.origin,
-    }, toActorId(params.actorId));
+    }, toActorId(params.callerActorId));
     return success(interp);
   }
 
@@ -312,7 +311,7 @@ export class GovernanceService {
     resolveBy?: string;
     scopeAssumption?: string;
     sourceRef?: string;
-    actorId?: number;
+    callerActorId: number;
   }): Promise<ServiceResponse<Interpretation>> {
     const updates: Record<string, unknown> = {};
     if (params.status != null) updates.status = params.status;
@@ -326,9 +325,7 @@ export class GovernanceService {
       toInterpretationId(params.id),
       updates,
       params.reason,
-      // params.actorId stays optional here — Task 5/6 formalize callerActorId across the
-      // service — but every current call site (UI, SDK) already supplies it.
-      toActorId(params.actorId as number)
+      toActorId(params.callerActorId)
     );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
@@ -394,7 +391,7 @@ export class GovernanceService {
 
   async logAction(params: {
     intentId: number;
-    actorId: number;
+    callerActorId: number;
     description: string;
     interpretationId?: number;
     domainId?: number;
@@ -406,14 +403,16 @@ export class GovernanceService {
   }): Promise<ServiceResponse<Action>> {
     const domainError = await this.validateOptionalDomain(params.domainId);
     if (domainError) return domainError;
-    const actor = await this.repo.getActor(toActorId(params.actorId));
+    const actor = await this.repo.getActor(toActorId(params.callerActorId));
     const inheritedGoverningContractKey = params.governingContractKey ?? actor?.contractKey ?? actor?.defaultContractKey;
     const governingContractError = await this.validateOptionalGoverningContractKey(inheritedGoverningContractKey);
     if (governingContractError) return governingContractError;
 
     const action = await this.repo.logAction({
       intentId: intendId(params.intentId),
-      actorId: toActorId(params.actorId),
+      // The caller is also the record's author — origin_kind, not a second actor column,
+      // is what records an agent filing on someone else's behalf.
+      actorId: toActorId(params.callerActorId),
       description: params.description,
       domainId: params.domainId != null ? toDomainId(params.domainId) : undefined,
       governingContractKey: inheritedGoverningContractKey,
@@ -423,7 +422,7 @@ export class GovernanceService {
       interpretationId: params.interpretationId != null ? toInterpretationId(params.interpretationId) : undefined,
       outcome: params.outcome,
       originKind: this.origin,
-    }, toActorId(params.actorId));
+    }, toActorId(params.callerActorId));
     return success(action);
   }
 
@@ -457,17 +456,16 @@ export class GovernanceService {
   async claim(params: {
     entityTable: string;
     entityId: number;
-    actorId: number;
+    subjectActorId: number;
+    callerActorId: number;
     note?: string;
   }): Promise<ServiceResponse<Claim>> {
     const claim = await this.repo.acquireClaim(
       params.entityTable,
       params.entityId,
-      toActorId(params.actorId),
+      toActorId(params.subjectActorId),
       params.note,
-      // Single actor param today: the claimant is also the caller until Task 6 splits
-      // subjectActorId from callerActorId.
-      toActorId(params.actorId)
+      toActorId(params.callerActorId)
     );
     return success(claim);
   }
@@ -513,17 +511,19 @@ export class GovernanceService {
   async registerExpertise(params: {
     intentId: number;
     domainId: number;
-    actorId: number;
+    callerActorId: number;
     signal: ExpertiseSignal;
     note?: string;
   }): Promise<ServiceResponse<ExpertiseSignalRecord>> {
     const record = await this.repo.registerExpertiseSignal({
       intentId: intendId(params.intentId),
       domainId: toDomainId(params.domainId),
-      actorId: toActorId(params.actorId),
+      // The caller is also the record's author — origin_kind, not a second actor column,
+      // is what records an agent filing on someone else's behalf.
+      actorId: toActorId(params.callerActorId),
       signal: params.signal,
       note: params.note,
-    }, toActorId(params.actorId));
+    }, toActorId(params.callerActorId));
     return success(record);
   }
 
@@ -594,6 +594,7 @@ export class GovernanceService {
     title: string;
     body: string;
     custodianActorId: number;
+    callerActorId: number;
     scope?: string;
     domainId?: number;
     parentKey?: string;
@@ -626,9 +627,9 @@ export class GovernanceService {
       governingContractKey: params.governingContractKey,
       mandateRef: params.mandateRef,
       contentHash: hashContractBody(params.body),
-    // custodianActorId is a recorded role, not a caller — but it is the only actor in
-    // scope here until Task 6 adds a distinct callerActorId param to this method.
-    }, custodian.id);
+    // custodianActorId is a recorded role, not the caller — it stays on the contract
+    // while callerActorId names whoever performed the registration.
+    }, toActorId(params.callerActorId));
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
   }
@@ -679,6 +680,7 @@ export class GovernanceService {
     body: string;
     reason: string;
     custodianActorId: number;
+    callerActorId: number;
     title?: string;
     status?: ContractStatus;
     domainId?: number;
@@ -707,9 +709,9 @@ export class GovernanceService {
         contentHash: hashContractBody(params.body),
       },
       params.reason,
-      // custodianActorId is a recorded role, not a caller — but it is the only actor in
-      // scope here until Task 6 adds a distinct callerActorId param to this method.
-      custodian.id
+      // custodianActorId is a recorded role, not the caller — it stays on the contract
+      // while callerActorId names whoever performed the supersession.
+      toActorId(params.callerActorId)
     );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
@@ -719,6 +721,7 @@ export class GovernanceService {
     name: string;
     body: string;
     custodianActorId: number;
+    callerActorId: number;
     title?: string;
     scope?: string;
     domainId?: number;
@@ -734,6 +737,7 @@ export class GovernanceService {
       title: params.title ?? `${params.name} actor type`,
       body: params.body,
       custodianActorId: params.custodianActorId,
+      callerActorId: params.callerActorId,
       scope: params.scope,
       domainId: params.domainId,
       parentKey: params.parentKey ?? "root:agent-bootstrap",
@@ -901,15 +905,16 @@ export class GovernanceService {
   }
 
   async bindActorRole(params: {
-    actorId: number;
+    subjectActorId: number;
+    callerActorId: number;
     roleId: number;
     surface: string;
     provider: string;
     credentialRef?: string;
     status?: ActorRoleBindingStatus;
   }): Promise<ServiceResponse<ActorRoleBinding>> {
-    const actor = await this.repo.getActor(toActorId(params.actorId));
-    if (!actor) return fail("NOT_FOUND", `Actor ${params.actorId} not found`);
+    const actor = await this.repo.getActor(toActorId(params.subjectActorId));
+    if (!actor) return fail("NOT_FOUND", `Actor ${params.subjectActorId} not found`);
     const role = await this.repo.getRole(params.roleId as any);
     if (!role) return fail("NOT_FOUND", `Role ${params.roleId} not found`);
     const binding = await this.repo.bindActorRole({
@@ -919,9 +924,7 @@ export class GovernanceService {
       provider: params.provider,
       credentialRef: params.credentialRef,
       status: params.status,
-    // actor.id is the subject (the actor being bound), also passed as caller until
-    // Task 6 splits subjectActorId from callerActorId.
-    }, actor.id);
+    }, toActorId(params.callerActorId));
     return success(binding);
   }
 
@@ -945,14 +948,15 @@ export class GovernanceService {
   // ----------------------------------------------------------
 
   async openActorSession(params: {
-    actorId: number;
+    subjectActorId: number;
+    callerActorId: number;
     sessionRef: string;
     surface: string;
     provider?: string;
     transcriptRef?: string;
   }): Promise<ServiceResponse<ActorSession>> {
-    const actor = await this.repo.getActor(toActorId(params.actorId));
-    if (!actor) return fail("NOT_FOUND", `Actor ${params.actorId} not found`);
+    const actor = await this.repo.getActor(toActorId(params.subjectActorId));
+    if (!actor) return fail("NOT_FOUND", `Actor ${params.subjectActorId} not found`);
     if (actor.status !== "active") return fail("ACTOR_INACTIVE", `Actor ${actor.name} is ${actor.status}`);
     const session = await this.repo.openActorSession({
       actorId: actor.id,
@@ -960,37 +964,33 @@ export class GovernanceService {
       surface: params.surface,
       provider: params.provider ?? actor.provider,
       transcriptRef: params.transcriptRef,
-    // actor.id is the subject (the session owner), also passed as caller until Task 6
-    // splits subjectActorId from callerActorId.
-    }, actor.id);
+    }, toActorId(params.callerActorId));
     return success(session);
   }
 
   async heartbeatActorSession(params: {
-    actorId: number;
+    subjectActorId: number;
+    callerActorId: number;
     sessionRef: string;
   }): Promise<ServiceResponse<ActorSession>> {
-    // The session owner is also the caller until Task 6 splits subjectActorId from
-    // callerActorId.
     const result = await this.repo.heartbeatActorSession(
       params.sessionRef,
-      toActorId(params.actorId),
-      toActorId(params.actorId)
+      toActorId(params.subjectActorId),
+      toActorId(params.callerActorId)
     );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
   }
 
   async closeActorSession(params: {
-    actorId: number;
+    subjectActorId: number;
+    callerActorId: number;
     sessionRef: string;
   }): Promise<ServiceResponse<ActorSession>> {
-    // The session owner is also the caller until Task 6 splits subjectActorId from
-    // callerActorId.
     const result = await this.repo.closeActorSession(
       params.sessionRef,
-      toActorId(params.actorId),
-      toActorId(params.actorId)
+      toActorId(params.subjectActorId),
+      toActorId(params.callerActorId)
     );
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
@@ -1066,7 +1066,7 @@ export class GovernanceService {
     kind: string;
     title: string;
     summary: string;
-    actorId: number;
+    callerActorId: number;
     scope?: string;
     bodyRef?: string;
     domainId?: number;
@@ -1077,14 +1077,16 @@ export class GovernanceService {
     policyRef?: string;
     unmandatedReason?: string;
   }): Promise<ServiceResponse<Report>> {
-    const actor = await this.repo.getActor(toActorId(params.actorId));
-    if (!actor) return fail("NOT_FOUND", `Actor ${params.actorId} not found`);
+    const actor = await this.repo.getActor(toActorId(params.callerActorId));
+    if (!actor) return fail("NOT_FOUND", `Actor ${params.callerActorId} not found`);
     if (actor.status !== "active") return fail("ACTOR_INACTIVE", `Actor ${actor.name} is ${actor.status}`);
     const report = await this.repo.registerReport({
       scope: params.scope ?? actor.defaultScope,
       kind: params.kind,
       title: params.title,
       summary: params.summary,
+      // The caller is also the record's author — origin_kind, not a second actor column,
+      // is what records an agent filing on someone else's behalf.
       actorId: actor.id,
       assumedRole: params.assumedRole,
       invokedSkillRef: params.invokedSkillRef,

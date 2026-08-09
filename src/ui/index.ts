@@ -252,7 +252,7 @@ async function handleWrite(request: IncomingMessage, url: URL, response: ServerR
       addressedTo: optionalBodyInteger(body.addressedTo, "addressedTo"),
       parentId: optionalBodyInteger(body.parentId, "parentId"),
       status: optionalIntentStatus(body.status),
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
     });
     writeJson(response, result.ok ? 201 : 400, result);
     return;
@@ -269,7 +269,7 @@ async function handleWrite(request: IncomingMessage, url: URL, response: ServerR
       description: optionalBodyString(body.description, "description"),
       resolutionNotes: optionalBodyString(body.resolutionNotes, "resolutionNotes"),
       addressedTo: optionalBodyInteger(body.addressedTo, "addressedTo"),
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
     });
     writeJson(response, result.ok ? 200 : 400, result);
     return;
@@ -281,7 +281,7 @@ async function handleWrite(request: IncomingMessage, url: URL, response: ServerR
     const result = await context.service.registerInterpretation({
       intentId: requiredInteger(body.intentId, "intentId"),
       domainId: requiredInteger(body.domainId, "domainId"),
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
       title: requiredString(body.title, "title"),
       scopeAssumption: optionalBodyString(body.scopeAssumption, "scopeAssumption"),
       status: optionalInterpretationStatus(body.status) ?? "proposed",
@@ -306,7 +306,7 @@ async function handleWrite(request: IncomingMessage, url: URL, response: ServerR
       resolverId: optionalBodyInteger(body.resolverId, "resolverId"),
       resolveBy: optionalBodyString(body.resolveBy, "resolveBy"),
       scopeAssumption: optionalBodyString(body.scopeAssumption, "scopeAssumption"),
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
     });
     writeJson(response, result.ok ? 200 : 400, result);
     return;
@@ -343,7 +343,7 @@ async function handleWrite(request: IncomingMessage, url: URL, response: ServerR
     }
     const result = await context.service.logAction({
       intentId,
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
       interpretationId: optionalBodyInteger(body.interpretationId, "interpretationId"),
       domainId: optionalBodyInteger(body.domainId, "domainId"),
       description: requiredString(body.description, "description"),
@@ -361,7 +361,7 @@ async function handleWrite(request: IncomingMessage, url: URL, response: ServerR
     const actor = await requireDefaultActor(context);
     const body = await readJsonBody(request);
     const result = await context.service.registerReport({
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
       kind: optionalBodyString(body.kind, "kind") ?? "operator-note",
       title: requiredString(body.title, "title"),
       summary: requiredString(body.summary, "summary"),
@@ -384,7 +384,8 @@ async function handleWrite(request: IncomingMessage, url: URL, response: ServerR
     const result = await context.service.claim({
       entityTable: optionalBodyString(body.entityTable, "entityTable") ?? "intents",
       entityId: requiredInteger(body.entityId, "entityId"),
-      actorId: actor.id as number,
+      subjectActorId: actor.id as number,
+      callerActorId: actor.id as number,
       note: optionalBodyString(body.note, "note"),
     });
     writeJson(response, result.ok ? 201 : 400, result);
@@ -410,7 +411,7 @@ async function handleWrite(request: IncomingMessage, url: URL, response: ServerR
     const result = await context.service.registerExpertise({
       intentId: requiredInteger(body.intentId, "intentId"),
       domainId: requiredInteger(body.domainId, "domainId"),
-      actorId: actor.id as number,
+      callerActorId: actor.id as number,
       signal: requiredEnum(body.signal, ["concerned", "not_concerned", "blocked"], "signal"),
       note: optionalBodyString(body.note, "note"),
     });

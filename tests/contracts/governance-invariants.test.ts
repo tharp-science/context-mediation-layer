@@ -914,3 +914,120 @@ describe("Actor registration atomicity", () => {
     }
   });
 });
+
+// ============================================================
+// Contract event attribution (Task 6): events name the caller,
+// not the custodian. The custodian is a recorded role on the
+// contract itself; the caller names who performed the operation.
+// ============================================================
+
+describe("Contract event attribution", () => {
+  it("registerContract attributes the event to the caller, not the custodian", async () => {
+    for (const repo of repositories()) {
+      try {
+        // Create two distinct actors
+        const custodian = await repo.registerActor(
+          { name: "contract-custodian", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(1)
+        );
+        const caller = await repo.registerActor(
+          { name: "contract-caller", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          custodian.id
+        );
+
+        // Register a contract with different custodian and caller
+        const result = await repo.registerContract({
+          key: "test:contract-attribution",
+          kind: "root",
+          scope: "default",
+          title: "Test contract",
+          body: "Test body",
+          status: "active",
+          version: 1,
+          custodianActorId: custodian.id,
+          contentHash: "sha256:test",
+        }, caller.id);
+
+        if ("code" in result) throw new Error(`registerContract failed: ${result.message}`);
+
+        // Assert the contract stores the custodian
+        expect(result.custodianActorId).toBe(custodian.id);
+
+        // Assert the event is attributed to the caller, not the custodian
+        const events = await repo.listEvents({ entityTable: "contracts" });
+        const registered = events.filter((e) => e.eventType === "contract_registered");
+        expect(registered).toHaveLength(1);
+        expect(registered[0].actorId).toBe(caller.id);
+        expect(registered[0].actorId).not.toBe(custodian.id);
+      } finally {
+        if (repo instanceof SqliteGovernanceRepository) repo.close();
+      }
+    }
+  });
+
+  it("supersedeContract attributes events to the caller, not the custodian", async () => {
+    for (const repo of repositories()) {
+      try {
+        // Create two distinct actors
+        const custodian = await repo.registerActor(
+          { name: "supersede-custodian", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(1)
+        );
+        const caller = await repo.registerActor(
+          { name: "supersede-caller", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          custodian.id
+        );
+
+        // Register an initial contract
+        const initialResult = await repo.registerContract({
+          key: "test:supersede-contract",
+          kind: "root",
+          scope: "default",
+          title: "Initial contract",
+          body: "Initial body",
+          status: "active",
+          version: 1,
+          custodianActorId: custodian.id,
+          contentHash: "sha256:initial",
+        }, custodian.id);
+
+        if ("code" in initialResult) throw new Error(`Initial registerContract failed: ${initialResult.message}`);
+
+        // Supersede the contract with a different caller
+        const supersedResult = await repo.supersedeContract(
+          initialResult.id,
+          {
+            body: "Revised body",
+            custodianActorId: custodian.id,
+            contentHash: "sha256:revised",
+            title: "Revised contract",
+            status: "active",
+          },
+          "superseding contract",
+          caller.id
+        );
+
+        if ("code" in supersedResult) throw new Error(`supersedeContract failed: ${supersedResult.message}`);
+
+        // Assert the replacement contract stores the custodian
+        expect(supersedResult.replacement.custodianActorId).toBe(custodian.id);
+
+        // Assert both supersede and registered events are attributed to the caller
+        const events = await repo.listEvents({ entityTable: "contracts" });
+        const superseded = events.filter((e) => e.eventType === "contract_superseded");
+        const registered = events.filter((e) => e.eventType === "contract_registered");
+
+        expect(superseded).toHaveLength(1);
+        expect(superseded[0].actorId).toBe(caller.id);
+        expect(superseded[0].actorId).not.toBe(custodian.id);
+
+        // The replacement contract_registered event (second contract_registered)
+        expect(registered.length).toBeGreaterThanOrEqual(2);
+        expect(registered[registered.length - 1].actorId).toBe(caller.id);
+        expect(registered[registered.length - 1].actorId).not.toBe(custodian.id);
+      } finally {
+        if (repo instanceof SqliteGovernanceRepository) repo.close();
+      }
+    }
+  });
+});

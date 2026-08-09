@@ -9,6 +9,7 @@ import {
   renderOperatorRuntime,
   type OperatorRuntimeMode,
 } from "../ui/runtime.js";
+import { envValue } from "../config/env.js";
 
 type JsonRpcId = string | number | null;
 
@@ -940,12 +941,12 @@ export class CmlMcpServer {
     }) => Promise<T>
   ) {
     const env = this.options.env ?? process.env;
-    const actor = optionalString(args, "actor") ?? this.options.defaultActor ?? env.CML_ACTOR;
+    const actor = optionalString(args, "actor") ?? this.options.defaultActor ?? envValue("CML_ACTOR", env);
     const actorId = actor
       ? undefined
-      : this.options.defaultActorId ?? parseOptionalEnvInteger(env.CML_ACTOR_ID);
+      : this.options.defaultActorId ?? parseOptionalEnvInteger(envValue("CML_ACTOR_ID", env));
     const repo = this.options.repository ?? new SqliteGovernanceRepository(
-      this.options.dbPath ?? env.CML_DB_PATH ?? requireEnv("CML_DB_PATH")
+      this.options.dbPath ?? envValue("CML_DB_PATH", env) ?? requireEnv("CML_DB_PATH")
     );
     const ownsRepo = !this.options.repository;
     try {

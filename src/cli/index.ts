@@ -20,6 +20,7 @@ import {
 } from "../governance/domain.js";
 import { inspectIntent, inspectInterpretation } from "../orchestration/inspect.js";
 import { ObsidianVaultService } from "../vault/obsidian-vault-service.js";
+import { envValue } from "../config/env.js";
 
 interface CliContext {
   service: GovernanceService;
@@ -179,7 +180,7 @@ function asConfig(value: unknown): CmlConfig {
 }
 
 function loadConfig(flags: Flags, allowMissingExplicit = false): ConfigBundle {
-  const explicitPath = flag(flags, "config") ?? process.env.CML_CONFIG;
+  const explicitPath = flag(flags, "config") ?? envValue("CML_CONFIG");
   const candidate = explicitPath ?? (existsSync(DEFAULT_CONFIG_PATH) ? DEFAULT_CONFIG_PATH : undefined);
   if (candidate == null) return { data: {} };
   const path = resolve(candidate);
@@ -196,13 +197,13 @@ function resolveMaybeRelative(path: string, config?: ConfigBundle): string {
 }
 
 function configString(flags: Flags, config: ConfigBundle, name: string, envName: string, configValue?: string): string | undefined {
-  return flag(flags, name) ?? process.env[envName] ?? configValue;
+  return flag(flags, name) ?? envValue(envName) ?? configValue;
 }
 
 function configNumber(flags: Flags, config: ConfigBundle, name: string, envName: string, configValue?: number): number | undefined {
   const fromFlag = intFlag(flags, name);
   if (fromFlag != null) return fromFlag;
-  const fromEnv = process.env[envName];
+  const fromEnv = envValue(envName);
   if (fromEnv != null && fromEnv.length > 0) {
     const parsed = Number(fromEnv);
     if (!Number.isInteger(parsed)) throw new Error(`${envName} must be an integer`);
@@ -373,7 +374,7 @@ function defaultConfig(params: {
 }
 
 async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> {
-  const configPath = config.path ?? resolve(flag(flags, "config") ?? process.env.CML_CONFIG ?? DEFAULT_CONFIG_PATH);
+  const configPath = config.path ?? resolve(flag(flags, "config") ?? envValue("CML_CONFIG") ?? DEFAULT_CONFIG_PATH);
   const scope = configString(flags, config, "scope", "CML_SCOPE", config.data.defaultScope ?? config.data.actor?.defaultScope) ?? DEFAULT_SCOPE;
   const actorName = configString(flags, config, "actor", "CML_ACTOR", config.data.actor?.name) ?? DEFAULT_ACTOR;
   const provider = configString(flags, config, "provider", "CML_PROVIDER", config.data.actor?.provider) ?? DEFAULT_PROVIDER;
@@ -1282,12 +1283,12 @@ async function main(): Promise<void> {
 
     const flagActorId = intFlag(flags, "actor-id");
     const flagActorName = flag(flags, "actor");
-    const envActorId = process.env.CML_ACTOR_ID ? Number(process.env.CML_ACTOR_ID) : undefined;
+    const envActorId = envValue("CML_ACTOR_ID") ? Number(envValue("CML_ACTOR_ID")) : undefined;
     const configActorId = config.data.actor?.id;
     const actorIdValue = flagActorId ?? (flagActorName ? undefined : envActorId ?? configActorId);
     const actorNameValue = flagActorId != null
       ? undefined
-      : flagActorName ?? (envActorId != null ? undefined : process.env.CML_ACTOR ?? (configActorId != null ? undefined : config.data.actor?.name));
+      : flagActorName ?? (envActorId != null ? undefined : envValue("CML_ACTOR") ?? (configActorId != null ? undefined : config.data.actor?.name));
 
     if (!Number.isInteger(actorIdValue) && !actorNameValue) {
       printJson(commandError("Set CML_ACTOR_ID/CML_ACTOR, pass --actor-id/--actor, or run `cml init`.", "ACTOR_REQUIRED"), pretty);

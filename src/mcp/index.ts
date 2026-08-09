@@ -2,14 +2,15 @@
 
 import readline from "node:readline";
 import { CmlMcpServer } from "./server.js";
+import { envValue } from "../config/env.js";
 
 const server = new CmlMcpServer({
-  dbPath: process.env.CML_DB_PATH,
-  defaultActor: process.env.CML_ACTOR,
-  defaultActorId: process.env.CML_ACTOR_ID ? Number(process.env.CML_ACTOR_ID) : undefined,
-  obsidianBin: process.env.CML_OBSIDIAN_BIN,
-  vaultName: process.env.CML_OBSIDIAN_VAULT,
-  vaultRoot: process.env.CML_VAULT_ROOT,
+  dbPath: envValue("CML_DB_PATH"),
+  defaultActor: envValue("CML_ACTOR"),
+  defaultActorId: envValue("CML_ACTOR_ID") ? Number(envValue("CML_ACTOR_ID")) : undefined,
+  obsidianBin: envValue("CML_OBSIDIAN_BIN"),
+  vaultName: envValue("CML_OBSIDIAN_VAULT"),
+  vaultRoot: envValue("CML_VAULT_ROOT"),
 });
 
 const rl = readline.createInterface({

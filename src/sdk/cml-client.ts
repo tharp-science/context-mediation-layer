@@ -3,6 +3,7 @@ import { GovernanceRepository } from "../governance/repository.js";
 import { GovernanceService, ServiceResponse } from "../governance/service.js";
 import { SqliteGovernanceRepository } from "../governance/sqlite-governance-repository.js";
 import { ObsidianVaultService, VaultCommandResult } from "../vault/obsidian-vault-service.js";
+import { envValue } from "../config/env.js";
 
 export interface CmlClientOptions {
   dbPath?: string;
@@ -33,8 +34,8 @@ function fail<T = never>(code: string, message: string): ServiceResponse<T> {
 }
 
 function parseEnvActorId(env: NodeJS.ProcessEnv): number | undefined {
-  if (!env.CML_ACTOR_ID) return undefined;
-  const parsed = Number(env.CML_ACTOR_ID);
+  if (!envValue("CML_ACTOR_ID", env)) return undefined;
+  const parsed = Number(envValue("CML_ACTOR_ID", env));
   if (!Number.isInteger(parsed)) throw new Error("CML_ACTOR_ID must be an integer");
   return parsed;
 }
@@ -62,7 +63,7 @@ export class CmlClient {
   constructor(options: CmlClientOptions = {}) {
     const env = options.env ?? process.env;
     this.actorId = options.actorId ?? (options.actor ? undefined : parseEnvActorId(env));
-    this.actorName = this.actorId != null ? undefined : options.actor ?? env.CML_ACTOR;
+    this.actorName = this.actorId != null ? undefined : options.actor ?? envValue("CML_ACTOR", env);
     if (this.actorId == null && !this.actorName) {
       throw new CmlSdkError("ACTOR_REQUIRED", "Set actor/actorId or CML_ACTOR/CML_ACTOR_ID");
     }
@@ -71,7 +72,7 @@ export class CmlClient {
       this.repo = options.repository;
       this.ownsRepo = false;
     } else {
-      const dbPath = options.dbPath ?? env.CML_DB_PATH;
+      const dbPath = options.dbPath ?? envValue("CML_DB_PATH", env);
       if (!dbPath) throw new CmlSdkError("DB_PATH_REQUIRED", "Set dbPath or CML_DB_PATH");
       this.repo = new SqliteGovernanceRepository(dbPath);
       this.ownsRepo = true;
@@ -79,9 +80,9 @@ export class CmlClient {
 
     this.service = new GovernanceService(this.repo, { origin: "proxy" });
     this.vaultService = new ObsidianVaultService({
-      obsidianBin: options.obsidianBin ?? env.CML_OBSIDIAN_BIN,
-      vaultName: options.vaultName ?? env.CML_OBSIDIAN_VAULT,
-      vaultRoot: options.vaultRoot ?? env.CML_VAULT_ROOT,
+      obsidianBin: options.obsidianBin ?? envValue("CML_OBSIDIAN_BIN", env),
+      vaultName: options.vaultName ?? envValue("CML_OBSIDIAN_VAULT", env),
+      vaultRoot: options.vaultRoot ?? envValue("CML_VAULT_ROOT", env),
       env,
     });
   }

@@ -2,6 +2,7 @@
 
 import { createServer, IncomingMessage, Server, ServerResponse } from "node:http";
 import { CmlMcpServer, CmlMcpServerOptions } from "./server.js";
+import { envValue } from "../config/env.js";
 
 interface CmlMcpHttpServerOptions extends CmlMcpServerOptions {
   token?: string;
@@ -146,23 +147,23 @@ function parsePort(value: string | undefined): number {
 }
 
 function main(): void {
-  const token = process.env.CML_MCP_TOKEN;
-  const allowInsecure = process.env.CML_MCP_ALLOW_INSECURE === "1";
+  const token = envValue("CML_MCP_TOKEN");
+  const allowInsecure = envValue("CML_MCP_ALLOW_INSECURE") === "1";
   if (!token && !allowInsecure) {
     throw new Error("Set CML_MCP_TOKEN before starting cml-mcp-http");
   }
-  const host = process.env.CML_MCP_HTTP_HOST ?? "127.0.0.1";
-  const port = parsePort(process.env.CML_MCP_HTTP_PORT);
+  const host = envValue("CML_MCP_HTTP_HOST") ?? "127.0.0.1";
+  const port = parsePort(envValue("CML_MCP_HTTP_PORT"));
   const server = createCmlMcpHttpServer({
-    dbPath: process.env.CML_DB_PATH,
-    defaultActor: process.env.CML_ACTOR,
-    defaultActorId: process.env.CML_ACTOR_ID ? Number(process.env.CML_ACTOR_ID) : undefined,
-    obsidianBin: process.env.CML_OBSIDIAN_BIN,
-    vaultName: process.env.CML_OBSIDIAN_VAULT,
-    vaultRoot: process.env.CML_VAULT_ROOT,
+    dbPath: envValue("CML_DB_PATH"),
+    defaultActor: envValue("CML_ACTOR"),
+    defaultActorId: envValue("CML_ACTOR_ID") ? Number(envValue("CML_ACTOR_ID")) : undefined,
+    obsidianBin: envValue("CML_OBSIDIAN_BIN"),
+    vaultName: envValue("CML_OBSIDIAN_VAULT"),
+    vaultRoot: envValue("CML_VAULT_ROOT"),
     token,
     allowInsecure,
-    allowedOrigins: parseList(process.env.CML_MCP_ALLOWED_ORIGINS),
+    allowedOrigins: parseList(envValue("CML_MCP_ALLOWED_ORIGINS")),
   });
   server.listen(port, host, () => {
     process.stderr.write(`cml-mcp-http listening on http://${host}:${port}/mcp\n`);

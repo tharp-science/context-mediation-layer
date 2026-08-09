@@ -14,6 +14,7 @@ import {
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, IncomingMessage, Server, ServerResponse } from "node:http";
 import { dirname } from "node:path";
+import { envValue, firstEnv } from "../config/env.js";
 
 interface PublicBridgeOptions {
   upstreamUrl: string;
@@ -1265,10 +1266,6 @@ function main(): void {
   server.listen(port, host, () => {
     process.stderr.write(`cml-mcp-public listening on http://${host}:${port}/mcp\n`);
   });
-}
-
-function firstEnv(...names: string[]): string | undefined {
-  return names.map((name) => process.env[name]).find((value): value is string => Boolean(value));
 }
 
 function isLocalHttpUrl(value: string): boolean {

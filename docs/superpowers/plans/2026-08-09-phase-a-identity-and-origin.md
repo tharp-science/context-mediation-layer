@@ -7,11 +7,11 @@ was the operator directly or an agent acting as proxy.
 
 **Architecture:** `GovernanceService` stays transport-agnostic — it cannot sniff its own
 caller, so origin is declared once at construction by each surface and stamped onto
-records the service creates. Caller identity becomes an explicit parameter on the six
-write methods that lack one, and the whole service converges on one vocabulary —
-`callerActorId` for who is acting, `subjectActorId` for who is being acted upon — so the
-three places those currently collide stop being ambiguous. No behaviour changes beyond
-the renames.
+records the service creates. Eight write methods have no caller identity at all and gain
+one; the whole service then converges on a single vocabulary — `callerActorId` for who is
+acting, `subjectActorId` for who is being acted upon — so the four places those currently
+collide stop being ambiguous. Events move to the caller too, which corrects a live
+mis-attribution bug rather than merely renaming around it.
 
 **Tech Stack:** TypeScript (ESM, `"type": "module"`), Node ≥22.5, `node:sqlite`
 (`DatabaseSync`), vitest 3.
@@ -47,12 +47,132 @@ Spec: `docs/superpowers/specs/2026-08-09-governed-provisioning-design.md`, Phase
 | `src/governance/domain.ts` | Domain types and branded ids | Add `OriginKind` type; add `originKind` to `Intent`, `Interpretation`, `Action`, `Report`; add `unmandatedReason` to `Report` |
 | `src/governance/schema.ts` | Canonical DDL for fresh databases | Add `origin_kind` to four tables, `unmandated_reason` to `reports` |
 | `src/governance/sqlite-governance-repository.ts` | SQLite persistence | Schema evolution for existing databases; persist and read back the new columns |
-| `src/governance/repository.ts` | Interface + in-memory implementation | Mirror the new fields; add `callerActorId` to six method signatures |
-| `src/governance/service.ts` | Transport-neutral application service | Accept `origin` at construction; stamp it; add `callerActorId` to the six that lack it; converge all 23 on `callerActorId` / `subjectActorId` |
+| `src/governance/repository.ts` | Interface + in-memory implementation | Mirror the new fields; take `callerActorId` on every write and emit events with it |
+| `src/governance/service.ts` | Transport-neutral application service | Accept `origin` at construction; stamp it; add `callerActorId` to the eight that lack it; converge all 23 on `callerActorId` / `subjectActorId` |
 | `src/cli/index.ts` | CLI control plane | Pass caller identity; set origin from `--origin` / `CML_ORIGIN` |
 | `src/mcp/server.ts`, `src/mcp/http.ts`, `src/mcp/public-bridge.ts`, `src/ui/index.ts` | Adapters | Construct the service with `origin: "proxy"` explicitly |
 | `tests/contracts/governance-service.test.ts` | Service contract tests | New describe block for origin and caller identity |
 | `tests/contracts/governance-invariants.test.ts` | Cross-repository invariants | Assert both repositories agree on the new fields |
+
+---
+
+### Task 0: Fix the event boundary — repositories emit with the caller
+
+**Do this first.** Everything else in Phase A is pointless without it. Events are emitted
+inside the repositories, not the service, and the actor they name is frequently the
+record's *subject* rather than whoever caused the write. Adding `callerActorId` to service
+methods would leave every event exactly as wrong as it is today.
+
+This is a live mis-attribution bug, not only a design gap. Confirmed cases:
+
+| Location | Event | Actor recorded | Should be |
+| --- | --- | --- | --- |
+| `sqlite-governance-repository.ts:732` | `interpretation_superseded` | `current.actorId` — the original author | whoever superseded it |
+| `:733` | `interpretation_filed` (replacement) | `current.actorId` | whoever superseded it |
+| `:851` | `claim_released` | `current.actorId` — the claim holder | whoever released it |
+| `:933`, `:1040`, `:1045` | `contract_registered`, `contract_superseded` | `custodianActorId` | whoever registered it |
+| `:648` | `interpretation_filed` | `created.actorId` | the caller |
+| `:794` | `action_logged` | `created.actorId` | the caller |
+| `:1333`, `:1364` | `expertise_signal_registered`, `report_created` | the record's own actor | the caller |
+
+**The boundary decision, made:** repository write methods take an explicit
+`callerActorId: ActorId` and emit events with it. Event emission stays in the
+repositories.
+
+The alternative — moving emission into the service — is cleaner in principle, since
+events are governance semantics and the repository is persistence. It is rejected here
+because it touches every method, risks silently dropping an event, and Phase A is meant
+to be plumbing. Revisit it if a later phase needs events the repository cannot see.
+
+**Files:**
+- Modify: `src/governance/repository.ts` (interface + in-memory)
+- Modify: `src/governance/sqlite-governance-repository.ts`
+- Test: `tests/contracts/governance-invariants.test.ts`
+
+**Interfaces:**
+- Produces: every write method on `GovernanceRepository` takes `callerActorId: ActorId`
+  as its final required parameter, and passes exactly that to `emitEvent`. The optional
+  `actorId?: ActorId` on `createIntent` and `updateIntent` becomes required and is
+  renamed `callerActorId`. `supersedeInterpretation` and `supersedeContract` gain it.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `tests/contracts/governance-invariants.test.ts`:
+
+```typescript
+  it("superseding attributes the event to the superseder, not the original author", async () => {
+    for (const repo of repositories()) {
+      const svc = new GovernanceService(repo);
+      const intent = await svc.registerIntent({ description: "P", source: "t", actorId: 1 });
+      if (!intent.ok) continue;
+      const interp = await svc.registerInterpretation({
+        intentId: intent.data.id, domainId: 1, actorId: 7, title: "by actor 7",
+      });
+      if (!interp.ok) continue;
+
+      await svc.supersedeInterpretation({
+        id: interp.data.id, newTitle: "by actor 3", reason: "revised", callerActorId: 3,
+      });
+
+      const events = await repo.listEvents({ entityTable: "interpretations" });
+      const supersede = events.filter((e) => e.eventType === "interpretation_superseded");
+      expect(supersede[supersede.length - 1].actorId).toBe(3);
+    }
+  });
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run tests/contracts/governance-invariants.test.ts -t "superseder"`
+Expected: FAIL — actor is 7 (the original author), not 3.
+
+- [ ] **Step 3: Add `callerActorId` to every repository write signature**
+
+In `src/governance/repository.ts`, add `callerActorId: ActorId` as the final required
+parameter to: `createIntent`, `updateIntent`, `createInterpretation`,
+`updateInterpretation`, `supersedeInterpretation`, `logAction`, `acquireClaim`,
+`releaseClaim`, `registerDomain`, `registerContract`, `supersedeContract`,
+`registerActor`, `updateActor`, `registerRole`, `bindActorRole`, `openActorSession`,
+`heartbeatActorSession`, `closeActorSession`, `registerScope`,
+`registerExpertiseSignal`, `registerReport`.
+
+`createIntent` and `updateIntent` already take an optional `actorId?: ActorId` — rename it
+and make it required, which removes the `requireActor(...)` throw entirely.
+
+- [ ] **Step 4: Emit with the caller in both implementations**
+
+Replace every `emitEvent` actor argument listed in the table above with the new
+`callerActorId` parameter. Do not change which actor is *stored on the record* — a claim
+still belongs to its holder, a contract still names its custodian. Only the event's actor
+changes.
+
+- [ ] **Step 5: Thread it from the service**
+
+Every `GovernanceService` method that calls a repository write passes its caller through.
+Until Task 5 and Task 6 land, several service methods have only one actor available;
+pass that. The renames in Task 6 are what make each call site unambiguous.
+
+- [ ] **Step 6: Update tests that asserted the old attribution**
+
+Some existing tests may assert the subject as the event actor. Those assertions encoded
+the bug. Update them and add a one-line comment saying so, rather than weakening the new
+test.
+
+- [ ] **Step 7: Run the tests, the suite and the type check**
+
+Run: `npm test && npm run lint`
+Expected: both PASS. A required final parameter means `tsc` finds every call site.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/ tests/ && git commit -m "fix(governance): emit events with the caller, not the record's subject
+
+Superseding an interpretation recorded the original author as the event actor;
+releasing a claim recorded the holder; registering a contract recorded the
+custodian. Repository writes now take callerActorId and emit with it. What is
+stored on the record is unchanged — only the event's actor is corrected."
+```
 
 ---
 
@@ -535,18 +655,20 @@ pass `report.unmandatedReason ?? null`. In `reportFromRow`:
 
 In the in-memory `createReport`, add `unmandatedReason: report.unmandatedReason,`.
 
-In both implementations of `supersedeInterpretation`, carry the origin of the record
-being superseded onto its replacement by adding `origin_kind` to the INSERT (SQLite) and
-`originKind: current.originKind` (in-memory).
+`supersedeInterpretation` needs an explicit replacement origin, not an inherited one. Add
+`replacementOriginKind: OriginKind` to its repository signature (alongside the
+`callerActorId` added in Task 0) and use it in the INSERT for the replacement row. Do
+**not** copy `current.originKind`: the superseding actor emitted the replacement, so the
+replacement carries *their* origin. The original row keeps its own, untouched.
 
 - [ ] **Step 6: Add the service parameter**
 
 In `registerReport`, add `unmandatedReason?: string;` to the params type and
 `unmandatedReason: params.unmandatedReason,` to the repository payload.
 
-In `supersedeInterpretation`, pass `originKind: this.origin` through to the repository
-call so the replacement is stamped with the origin of the actor doing the superseding,
-not the original author's.
+In `supersedeInterpretation`, pass `replacementOriginKind: this.origin` and
+`callerActorId: params.callerActorId` to the repository, so the replacement row and the
+two events it emits all name the actor who performed the supersession.
 
 - [ ] **Step 7: Add the CLI flag**
 
@@ -576,10 +698,13 @@ git add src/governance/ src/cli/index.ts tests/contracts/governance-service.test
 
 ---
 
-### Task 5: `callerActorId` on the six methods that have none
+### Task 5: `callerActorId` on the eight methods that have none
 
-These six accept no caller identity at all, so the event they emit cannot name who
-caused it. This is the change the rest of the design rests on.
+These eight accept no caller identity at all. Two of them — `registerActor` and
+`updateActor` — are provisioning acts that currently record no author whatsoever, which
+is the sharpest single instance of the problem this whole project exists to fix.
+
+Rows 5, 8, 13, 14, 15, 16, 21 and 22 of the Task 6 matrix.
 
 **Files:**
 - Modify: `src/governance/service.ts` — `supersedeInterpretation:321`, `retireActor:814`, `registerRole:831`, `registerDomain:968`, `registerScope:992`, `releaseClaim:449`
@@ -593,6 +718,8 @@ caused it. This is the change the rest of the design rests on.
 - Produces: each of the six methods gains a required `callerActorId: number` in its
   params object. Signatures after this task:
   - `supersedeInterpretation({ id, newTitle, reason, callerActorId, newScopeAssumption?, newStatus? })`
+  - `registerActor({ ...existing, callerActorId })`
+  - `updateActor({ id, callerActorId, ...existing })`
   - `retireActor({ id, callerActorId, reason? })`
   - `registerRole({ name, callerActorId, status?, contractKey?, contractRef?, contextRef?, policyRef?, description? })`
   - `registerDomain({ scope, name, concern, callerActorId, notionPageId? })`
@@ -648,8 +775,11 @@ the existing `emitEvent` signature
     });
 ```
 
-`scopes` has an autoincrement id but `registerScope` returns only the name, so pass `0`
-as the entity id and carry the name in the snapshot. Do the same shape for
+`scopes` already has an `INTEGER PRIMARY KEY AUTOINCREMENT` (`src/governance/schema.ts:6`)
+that nothing currently surfaces. Read it back after insert and pass the real id. Do
+**not** pass `0`: a fabricated entity id makes the event unresolvable and quietly
+contradicts the point of this phase. Phase B Task 1 widens `registerScope` to return a
+full `Scope`; here, a `SELECT id FROM scopes WHERE name = ?` is enough. Same shape for
 `registerDomain`, using the created domain's real id.
 
 - [ ] **Step 4: Update every call site**
@@ -678,42 +808,53 @@ git add src/ tests/ && git commit -m "feat(governance): require callerActorId on
 
 ---
 
-### Task 6: One vocabulary — `callerActorId` and `subjectActorId` everywhere
+### Task 6: One vocabulary — the full 23-method matrix
 
-Two renames in one sweep, because they only make sense together. After Task 5 the
-codebase has three names for two concepts: `callerActorId` on six methods, `actorId`
-meaning the caller on fourteen, and `actorId` meaning the *subject* on three. A reader
-cannot tell which is which without opening each one.
+After Task 5 the codebase has three names for two concepts. This converges it. Work the
+table top to bottom and tick each row; do not work from memory.
 
-In `bindActorRole`, `claim` and the session methods, `actorId` names the subject of the
-operation — the actor being bound, claiming, or opening a session. Callers have been
-passing the caller's own id because in practice they coincide. They will not always, and
-the parameter name should not be what decides it.
+**Concepts:** `callerActorId` is who performed the operation. `subjectActorId` is who the
+operation is *about*. `custodianActorId` is neither — it is a recorded role on a contract
+and it stays.
 
-The fourteen where `actorId` already means the caller — `registerIntent`, `updateIntent`,
-`registerInterpretation`, `updateInterpretation`, `logAction`, `registerExpertise`,
-`registerContract` (as `custodianActorId`, which stays: a custodian is a role, not a
-caller — add `callerActorId` alongside it), `supersedeContract` (same), `registerActor`,
-`updateActor`, `registerActorTypeContract`, `registerReport`, and the two remaining —
-rename to `callerActorId`.
+| # | Method | Today | Subject param after | Caller param after |
+| --- | --- | --- | --- | --- |
+| 1 | `registerIntent` | `actorId` (caller) | — | `callerActorId` |
+| 2 | `updateIntent` | `actorId` (caller) | — | `callerActorId` |
+| 3 | `registerInterpretation` | `actorId` (caller) | — | `callerActorId` |
+| 4 | `updateInterpretation` | `actorId` (caller) | — | `callerActorId` |
+| 5 | `supersedeInterpretation` | **none** | — | `callerActorId` *(added Task 5)* |
+| 6 | `logAction` | `actorId` (caller) | — | `callerActorId` |
+| 7 | `claim` | `actorId` = **subject** | `subjectActorId` | `callerActorId` *(new)* |
+| 8 | `releaseClaim` | **none** | — | `callerActorId` *(added Task 5)* |
+| 9 | `registerExpertise` | `actorId` (caller) | — | `callerActorId` |
+| 10 | `registerContract` | `custodianActorId` (role) | `custodianActorId` stays | `callerActorId` *(new)* |
+| 11 | `supersedeContract` | `custodianActorId` (role) | `custodianActorId` stays | `callerActorId` *(new)* |
+| 12 | `registerActorTypeContract` | `custodianActorId` (role) | `custodianActorId` stays | `callerActorId` *(new)* |
+| 13 | `registerActor` | **none** | — | `callerActorId` *(added Task 5)* |
+| 14 | `updateActor` | **none** | — | `callerActorId` *(added Task 5)* |
+| 15 | `retireActor` | **none** | — | `callerActorId` *(added Task 5)* |
+| 16 | `registerRole` | **none** | — | `callerActorId` *(added Task 5)* |
+| 17 | `bindActorRole` | `actorId` = **subject** | `subjectActorId` | `callerActorId` *(new)* |
+| 18 | `openActorSession` | `actorId` = **subject** | `subjectActorId` | `callerActorId` *(new)* |
+| 19 | `heartbeatActorSession` | `actorId` = **subject** | `subjectActorId` | `callerActorId` *(new)* |
+| 20 | `closeActorSession` | `actorId` = **subject** | `subjectActorId` | `callerActorId` *(new)* |
+| 21 | `registerDomain` | **none** | — | `callerActorId` *(added Task 5)* |
+| 22 | `registerScope` | **none** | — | `callerActorId` *(added Task 5)* |
+| 23 | `registerReport` | `actorId` (caller) | — | `callerActorId` |
 
-This is mechanical and `tsc --noEmit` finds every miss. Do it as one commit so the diff
-reads as a rename rather than as scattered logic changes.
+Rows 5, 8, 13, 14, 15, 16, 21, 22 — the eight with no caller identity — are done in
+Task 5. This task does the remaining fifteen renames.
 
-**Files:**
-- Modify: `src/governance/service.ts` — `claim:434`, `bindActorRole:861`, `openActorSession:903`, `heartbeatActorSession:923`, `closeActorSession:932`
-- Modify: `src/cli/index.ts`, `src/ui/index.ts`, `src/mcp/server.ts` — call sites
-- Test: `tests/contracts/governance-service.test.ts`
+On rows 3, 6, 9 and 23 the caller is also the record's author, and the record keeps
+storing them as such. That is not a conflation: the caller *is* the author. When an agent
+files on someone's behalf, `origin_kind` is what records it, not a second actor column.
 
-**Interfaces:**
-- Consumes: `callerActorId` convention from Task 5.
-- Produces: these methods take `subjectActorId` for the actor being acted upon and
-  `callerActorId` for the actor doing it. Both are required numbers.
-  - `claim({ entityTable, entityId, subjectActorId, callerActorId, note? })`
-  - `bindActorRole({ subjectActorId, roleId, surface, provider, callerActorId, credentialRef?, status? })`
-  - `openActorSession({ subjectActorId, sessionRef, surface, callerActorId, provider?, transcriptRef? })`
-  - `heartbeatActorSession({ subjectActorId, sessionRef, callerActorId })`
-  - `closeActorSession({ subjectActorId, sessionRef, callerActorId })`
+Verify with a grep when done — this must return nothing:
+
+```bash
+grep -nE '^\s+actorId(\?)?: (number|ActorId);' src/governance/service.ts
+```
 
 - [ ] **Step 1: Write the failing test**
 

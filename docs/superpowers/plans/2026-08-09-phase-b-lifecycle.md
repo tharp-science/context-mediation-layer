@@ -44,14 +44,14 @@ Additionally:
 
 | File | Responsibility | Change |
 | --- | --- | --- |
-| `src/governance/domain.ts` | Domain types | Add `archived` to the status unions; add `status` to `Domain`; add a `Scope` interface |
+| `src/governance/domain.ts` | Domain types | Add `archived` to the status unions; `ProvisionStatus`; `ScopeId`; a `Scope` interface with a real id; `status` and `archivedByScope` on `Domain`; `archivedByScope` on `Contract` |
 | `src/governance/schema.ts` | Canonical DDL | `status` on `scopes` and `domains` |
 | `src/governance/sqlite-governance-repository.ts` | SQLite persistence | Schema evolution; update and archive methods; archived-aware reads |
 | `src/governance/repository.ts` | Interface + in-memory | Mirror all of the above |
 | `src/governance/service.ts` | Application service | `updateScope`/`archiveScope`, `updateDomain`/`archiveDomain`, `updateRole`/`archiveRole`, `archiveContract`, `unbindActorRole`, `correctInterpretationDomain`; archive-impact query |
-| `src/cli/index.ts` | CLI control plane | `archive` and `update` verbs on six entity groups; `role unbind`; `interpret redomain`; `usage()` |
+| `src/cli/index.ts` | CLI control plane | `archive`/`unarchive`/`update` on scopes, domains, roles and contracts; `role unbind`; `interpret redomain`; `usage()` |
 | `tests/contracts/governance-service.test.ts` | Service contracts | Lifecycle describe blocks |
-| `tests/contracts/governance-invariants.test.ts` | Cross-repository invariants | Derived-archive agreement |
+| `tests/contracts/governance-invariants.test.ts` | Cross-repository invariants | Both repositories derive `archivedByScope` identically |
 | `tests/cli/cli.test.ts` | CLI surface | Verb coverage |
 
 ---
@@ -66,10 +66,10 @@ Additionally:
 **Interfaces:**
 - Consumes: Phase A's `callerActorId` convention.
 - Produces: `type ProvisionStatus = "active" | "archived"`;
-  `interface Scope { name: string; description: string; status: ProvisionStatus; createdAt: Date }`;
-  `Domain.status: ProvisionStatus`. `listScopes()` changes return type from
-  `Promise<string[]>` to `Promise<Scope[]>` — a breaking change to the repository
-  interface, caught by `tsc`.
+  `ScopeId` branded type; `interface Scope { id, name, description, status, createdAt }`;
+  `Domain.status: ProvisionStatus`; `getScope(name)` on both repositories.
+  `listScopes()` changes return type from `Promise<string[]>` to `Promise<Scope[]>` — a
+  breaking change to the repository interface, caught by `tsc`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -116,6 +116,7 @@ export type ProvisionStatus = "active" | "archived";
 export const PROVISION_STATUSES: readonly ProvisionStatus[] = ["active", "archived"] as const;
 
 export interface Scope {
+  id: ScopeId;
   name: string;
   description: string;
   status: ProvisionStatus;
@@ -123,7 +124,13 @@ export interface Scope {
 }
 ```
 
-Add `status: ProvisionStatus;` to the existing `Domain` interface.
+`scopes` already has an `INTEGER PRIMARY KEY AUTOINCREMENT`
+(`src/governance/schema.ts:6`) that nothing currently surfaces. Add a `ScopeId` branded
+type alongside the other id types, and a `getScope(name)` to both repositories, so scope
+events resolve like every other entity's rather than pointing at a fabricated id.
+
+Add `status: ProvisionStatus;` and `archivedByScope: boolean;` to the existing `Domain`
+interface, and `archivedByScope: boolean;` to `Contract`.
 
 - [ ] **Step 4: Add the columns to the canonical DDL**
 
@@ -189,8 +196,12 @@ The single most important task in this plan. One write; everything else is a rea
   - `archiveScope({ scope, callerActorId, reason })` → `ServiceResponse<Scope>`
   - `unarchiveScope({ scope, callerActorId, reason })` → `ServiceResponse<Scope>`
   - `scopeArchiveImpact(scope)` → `ServiceResponse<{ domains: Domain[]; contracts: Contract[]; actorsDefaultedHere: Actor[]; intentCount: number; reportCount: number }>`
-  - `Domain.effectiveStatus` and `Contract.effectiveStatus`, computed on read as
-    `archived` when the row's own status is archived **or** its scope is archived.
+  - `Domain.archivedByScope: boolean` and `Contract.archivedByScope: boolean`, computed
+    on read: true when the row's scope is archived. Deliberately **not** an
+    `effectiveStatus`: contracts move through `draft | active | superseded | retired |
+    archived`, and collapsing that into `active | archived` would erase lifecycle state
+    the record needs. "Is this effectively archived" is
+    `status === "archived" || archivedByScope` — explicit at the call site, loses nothing.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -216,7 +227,7 @@ The single most important task in this plan. One write; everything else is a rea
       expect(domain.ok).toBe(true);
       if (!domain.ok) return;
       expect(domain.data.status).toBe("active");
-      expect(domain.data.effectiveStatus).toBe("archived");
+      expect(domain.data.archivedByScope).toBe(true);
     });
 
     it("does not disable actors defaulted to an archived scope", async () => {
@@ -263,7 +274,7 @@ The single most important task in this plan. One write; everything else is a rea
       await svc.unarchiveScope({ scope: "round-trip", callerActorId: 1, reason: "undo" });
 
       const domain = await svc.getDomain(d.data.id);
-      expect(domain.ok && domain.data.effectiveStatus).toBe("active");
+      expect(domain.ok && domain.data.archivedByScope).toBe(false);
     });
   });
 ```
@@ -273,24 +284,26 @@ The single most important task in this plan. One write; everything else is a rea
 Run: `npx vitest run tests/contracts/governance-service.test.ts -t "scope archive"`
 Expected: FAIL — `archiveScope` is not a function.
 
-- [ ] **Step 3: Add `effectiveStatus` to the read path**
+- [ ] **Step 3: Add `archivedByScope` to the read path**
 
 In `src/governance/domain.ts`, add to `Domain` and `Contract`:
 
 ```typescript
-  /** Own status, or archived because the scope is. Computed on read; never stored. */
-  effectiveStatus?: ProvisionStatus;
+  /** True when this row's scope is archived. Computed on read; never stored. */
+  archivedByScope: boolean;
 ```
 
 In both repositories, `getDomain`, `listDomains`, `getContract` and `listContracts`
-resolve it by joining the row's scope to `scopes.status`. In SQLite this is one extra
-join, for example:
+resolve it by joining the row's scope to `scopes.status`:
 
 ```sql
-SELECT d.*, CASE WHEN s.status = 'archived' OR d.status = 'archived'
-                 THEN 'archived' ELSE 'active' END AS effective_status
+SELECT d.*, (s.status = 'archived') AS archived_by_scope
 FROM domains d JOIN scopes s ON s.name = d.scope
 ```
+
+Map with `archivedByScope: Boolean(row.archived_by_scope)`. The row's own `status` is
+untouched, so a superseded contract in an archived scope still reads `superseded` —
+which is the point.
 
 - [ ] **Step 4: Add the repository archive methods**
 
@@ -316,7 +329,8 @@ would touch before asking.
 - [ ] **Step 6: Add the invariant test**
 
 In `tests/contracts/governance-invariants.test.ts`, assert both repositories derive
-`effectiveStatus` identically for a domain in an archived scope.
+`archivedByScope` identically for a domain in an archived scope, and that the domain's
+own `status` is still `active` in both.
 
 - [ ] **Step 7: Run the tests, the suite and the type check**
 
@@ -713,11 +727,17 @@ git add src/ tests/ docs/ README.md && git commit -m "feat(governance): hide arc
 ## Done when
 
 - `npm test` and `npm run lint` are clean.
-- Every one of the six provisioned entity types has create, read, update and archive.
+- Every provisioned entity has a complete lifecycle, in the vocabulary that fits it:
+  **scopes, domains, roles and contracts archive** (reversible, container semantics);
+  **actors retire** via the existing `retireActor` (`actors.status` is
+  `active | suspended | retired`); **bindings unbind** to `retired`. Two vocabularies,
+  deliberately: you archive a namespace, you retire a participant. Do not add
+  `archiveActor` or `archiveActorRoleBinding` — that would give actors two overlapping
+  end states and force every reader to work out which one means what.
 - `cml scope impact <name>` reports what archiving would touch, and
   `cml scope archive --name <name> --reason <why>` performs it in one write.
-- Archiving a scope leaves actors defaulted to it `active`, and their `effectiveStatus`
-  reads archived through the join.
+- Archiving a scope leaves actors defaulted to it `active`; domains and contracts in it
+  keep their own `status` and read `archivedByScope: true` through the join.
 - Unarchiving restores exactly what archiving removed, with no per-child bookkeeping.
 - No `DELETE` statement exists anywhere in `src/governance/`.
 

@@ -26,8 +26,11 @@ Measured against the canonical store and the working tree on 2026-08-09.
   carry one that no code path writes. Nothing has update.
 - `OperatorSurfaceState` (`src/ui/runtime.ts:59`) exposes `actors` and `domains` and
   nothing else.
-- Of 23 write methods on `GovernanceService`, six carry no caller identity. In three
-  more, `actorId` names the subject rather than the caller.
+- Of 23 write methods on `GovernanceService`, **eight** carry no caller identity:
+  `supersedeInterpretation`, `releaseClaim`, `registerActor`, `updateActor`,
+  `retireActor`, `registerRole`, `registerDomain`, `registerScope`. In four more,
+  `actorId` names the subject rather than the caller. Provisioning an actor therefore
+  records no author at all.
 - 13 of 17 active actors carry no `contractKey`, `defaultContractKey` or `actorType`,
   including `seb` (actor 1). Two more carry only free-text `contractRef`. One points at
   a retired contract.
@@ -52,8 +55,8 @@ Each ships independently and leaves the system working.
 
 ### A — identity and origin
 
-Explicit `callerActorId` on all 23 write methods; the three ambiguous ones rename their
-existing parameter to `subjectActorId`. Service writes consume the caller identity the
+Explicit `callerActorId` on all 23 write methods; the four where `actorId` names the
+subject rename it to `subjectActorId`. Service writes consume the caller identity the
 bridge already resolves (`mapOAuthActor`, `src/mcp/public-bridge.ts:604`) rather than a
 per-process default.
 

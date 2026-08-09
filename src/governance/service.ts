@@ -50,6 +50,8 @@ import {
   Report,
   OriginKind,
   intendId,
+  claimId,
+  actionId,
   actorId as toActorId,
   domainId as toDomainId,
   interpretationId as toInterpretationId,
@@ -424,6 +426,18 @@ export class GovernanceService {
       originKind: this.origin,
     }, toActorId(params.callerActorId));
     return success(action);
+  }
+
+  async getAction(id: number): Promise<ServiceResponse<Action>> {
+    const action = await this.repo.getAction(actionId(id));
+    if (!action) return fail("NOT_FOUND", `Action ${id} not found`);
+    return success(action);
+  }
+
+  async getClaim(id: number): Promise<ServiceResponse<Claim>> {
+    const claim = await this.repo.getClaim(claimId(id));
+    if (!claim) return fail("NOT_FOUND", `Claim ${id} not found`);
+    return success(claim);
   }
 
   async listActions(params?: {

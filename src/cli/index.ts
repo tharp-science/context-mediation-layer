@@ -239,30 +239,48 @@ const VAULT_SEARCH_FORMATS = ["text", "json"] as const;
 type CmlRef =
   | { kind: "intent"; id: number; canonical: string; entityTable: "intents" }
   | { kind: "interpretation"; id: number; canonical: string; entityTable: "interpretations" }
-  | { kind: "report"; id: number; canonical: string; entityTable: "reports" };
+  | { kind: "report"; id: number; canonical: string; entityTable: "reports" }
+  | { kind: "action"; id: number; canonical: string; entityTable: "actions" }
+  | { kind: "claim"; id: number; canonical: string; entityTable: "claims" };
+
+/**
+ * Reference prefixes, and why the confusing ones are permanent.
+ *
+ * `CML-` means intent and `INT-` means interpretation. Both read wrongly —
+ * `CML` is the system's own name and `INT` looks like intent — but 335 and 249
+ * rows of the canonical ledger respectively refer to records using them. A
+ * prefix may be added; one may never be reassigned. Pointing `INT-` at intents
+ * would not fail, it would quietly resolve a quarter of the ledger's references
+ * to the wrong record, which is the worst outcome available here.
+ *
+ * The long forms are unambiguous and are what `canonical` emits, so new prose
+ * should prefer INTENT-35 over CML-35.
+ */
+const REF_PREFIXES: ReadonlyArray<{ aliases: readonly string[]; ref: (id: number) => CmlRef }> = [
+  { aliases: ["CML", "INTENT"], ref: (id) => ({ kind: "intent", id, canonical: `INTENT-${id}`, entityTable: "intents" }) },
+  { aliases: ["INT", "INTERPRETATION"], ref: (id) => ({ kind: "interpretation", id, canonical: `INTERPRETATION-${id}`, entityTable: "interpretations" }) },
+  { aliases: ["RPT", "REPORT"], ref: (id) => ({ kind: "report", id, canonical: `REPORT-${id}`, entityTable: "reports" }) },
+  { aliases: ["ACT", "ACTION"], ref: (id) => ({ kind: "action", id, canonical: `ACTION-${id}`, entityTable: "actions" }) },
+  { aliases: ["CLM", "CLAIM"], ref: (id) => ({ kind: "claim", id, canonical: `CLAIM-${id}`, entityTable: "claims" }) },
+];
 
 function parseCmlRef(value: string | undefined): CmlRef {
   if (value == null || value.length === 0) throw new Error("Missing CML reference");
   const match = /^([A-Za-z]+)-?(\d+)$/.exec(value.trim());
   if (!match) {
-    throw new Error("Reference must look like INTENT-35, INTERPRETATION-101, or REPORT-8");
+    throw new Error("Reference must look like INTENT-35, INTERPRETATION-101, REPORT-8, ACTION-12 or CLAIM-4");
   }
 
   const prefix = match[1].toUpperCase();
   const id = Number(match[2]);
   if (!Number.isInteger(id)) throw new Error("Reference id must be an integer");
 
-  if (prefix === "CML" || prefix === "INTENT") {
-    return { kind: "intent", id, canonical: `INTENT-${id}`, entityTable: "intents" };
+  const entry = REF_PREFIXES.find((candidate) => candidate.aliases.includes(prefix));
+  if (!entry) {
+    const known = REF_PREFIXES.flatMap((candidate) => candidate.aliases).join(", ");
+    throw new Error(`Unsupported CML reference prefix: ${match[1]}. Known prefixes: ${known}`);
   }
-  if (prefix === "INT" || prefix === "INTERPRETATION") {
-    return { kind: "interpretation", id, canonical: `INTERPRETATION-${id}`, entityTable: "interpretations" };
-  }
-  if (prefix === "RPT" || prefix === "REPORT") {
-    return { kind: "report", id, canonical: `REPORT-${id}`, entityTable: "reports" };
-  }
-
-  throw new Error(`Unsupported CML reference prefix: ${match[1]}`);
+  return entry.ref(id);
 }
 
 function usage(): ServiceResponse<{ commands: string[] }> {
@@ -288,8 +306,8 @@ function usage(): ServiceResponse<{ commands: string[] }> {
         "cml expertise register|coverage",
         "cml event list|history",
         "cml vault read|search|write|append|move|delete",
-        "cml resolve <INTENT-35|INTERPRETATION-101|REPORT-8>",
-        "cml context <INTENT-35|INTERPRETATION-101>",
+        "cml resolve <INTENT-35|INTERPRETATION-101|REPORT-8|ACTION-12|CLAIM-4>  (CML-/INT-/RPT-/ACT-/CLM- also accepted)",
+        "cml context <INTENT-35|INTERPRETATION-101|REPORT-8|ACTION-12|CLAIM-4>",
         "cml status",
         "  global flags: --actor <name> --origin <direct|proxy> --db <path> --pretty",
       ],
@@ -755,7 +773,19 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         ? { ok: true, data: { ref, entity: result.data }, meta: result.meta }
         : result;
     }
-    const result = await ctx.service.getReport(ref.id);
+    if (ref.kind === "report") {
+      const result = await ctx.service.getReport(ref.id);
+      return result.ok
+        ? { ok: true, data: { ref, entity: result.data }, meta: result.meta }
+        : result;
+    }
+    if (ref.kind === "action") {
+      const result = await ctx.service.getAction(ref.id);
+      return result.ok
+        ? { ok: true, data: { ref, entity: result.data }, meta: result.meta }
+        : result;
+    }
+    const result = await ctx.service.getClaim(ref.id);
     return result.ok
       ? { ok: true, data: { ref, entity: result.data }, meta: result.meta }
       : result;
@@ -774,6 +804,28 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
       return result.ok
         ? { ok: true, data: { ref, context: result.data }, meta: { schema_version: 2 } }
         : commandError(result.error, "NOT_FOUND");
+    }
+    if (ref.kind === "action") {
+      // An action always carries a mandating intent, so its context is that intent's.
+      const action = await ctx.service.getAction(ref.id);
+      if (!action.ok) return action;
+      const related = await inspectIntent(action.data.intentId as number, ctx.service);
+      return {
+        ok: true,
+        data: { ref, action: action.data, context: related.ok ? related.data : undefined },
+        meta: { schema_version: 2 },
+      };
+    }
+    if (ref.kind === "claim") {
+      // A claim points at an arbitrary entity rather than an intent, so its context
+      // is what it holds, not a lineage.
+      const claim = await ctx.service.getClaim(ref.id);
+      if (!claim.ok) return claim;
+      return {
+        ok: true,
+        data: { ref, claim: claim.data, holds: { entityTable: claim.data.entityTable, entityId: claim.data.entityId } },
+        meta: { schema_version: 2 },
+      };
     }
     const report = await ctx.service.getReport(ref.id);
     if (!report.ok) return report;

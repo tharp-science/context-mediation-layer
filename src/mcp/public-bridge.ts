@@ -39,7 +39,7 @@ interface PublicBridgeOptions {
   oauth?: OAuthOptions;
 }
 
-interface PublicBridgeProfile {
+export interface PublicBridgeProfile {
   writableExactPaths?: Set<string>;
   writablePathPrefixes?: string[];
   writablePathSuffixes?: string[];
@@ -1215,22 +1215,53 @@ function parseKeyValueMap(value: string | undefined): Map<string, string> | unde
   return new Map(entries);
 }
 
-function actorProfilesFromEnv(): Map<string, PublicBridgeProfile> | undefined {
+/**
+ * Bridge profiles, one per configured slot.
+ *
+ * A slot is a short name that groups a set of `CML_PUBLIC_MCP_<SLOT>_*`
+ * variables. `CML_PUBLIC_MCP_PROFILES` lists the slots to load; when it is
+ * absent only `PA` is read, which is exactly the behaviour of the deployed
+ * host and keeps its existing env files working unchanged.
+ *
+ * Until this was generalised the function built a Map but only ever put one
+ * entry in it, so every caller reaching the bridge resolved to a single actor
+ * regardless of who they were.
+ */
+const DEFAULT_PROFILE_SLOTS = ["PA"];
+
+function profileSlots(): string[] {
+  const configured = parseCsv(firstEnv("CML_PUBLIC_MCP_PROFILES"))
+    .map((slot) => slot.trim().toUpperCase().replace(/[^A-Z0-9_]/g, ""))
+    .filter((slot) => slot.length > 0);
+  return configured.length > 0 ? Array.from(new Set(configured)) : DEFAULT_PROFILE_SLOTS;
+}
+
+function profileFromSlot(slot: string): { actor: string; profile: PublicBridgeProfile } | undefined {
+  const read = (suffix: string) => firstEnv(`CML_PUBLIC_MCP_${slot}_${suffix}`);
+  const actor = read("ACTOR");
+  if (!actor) return undefined;
+  return {
+    actor,
+    profile: {
+      writableExactPaths: new Set(parseCsv(read("WRITABLE_EXACT_PATHS"))),
+      writablePathPrefixes: parseCsv(read("WRITABLE_PATH_PREFIXES")),
+      writablePathSuffixes: parseCsv(read("WRITABLE_PATH_SUFFIXES")),
+      allowWritableSuffixPaths: read("ALLOW_WRITABLE_SUFFIX_PATHS") === "1",
+      allowAllWritablePaths: read("ALLOW_ALL_WRITABLE_PATHS") === "1",
+      assumedRole: read("ASSUMED_ROLE"),
+      invokedSkillRef: read("INVOKED_SKILL_REF"),
+      policyRef: read("POLICY_REF"),
+      governingContractKey: read("GOVERNING_CONTRACT_KEY"),
+      requireInterpretationForVaultMutations: read("REQUIRE_INTERPRETATION_FOR_VAULT_MUTATIONS") === "1",
+    },
+  };
+}
+
+export function actorProfilesFromEnv(): Map<string, PublicBridgeProfile> | undefined {
   const profiles = new Map<string, PublicBridgeProfile>();
-  const principalAdvisorActor = firstEnv("CML_PUBLIC_MCP_PA_ACTOR");
-  if (principalAdvisorActor) {
-    profiles.set(principalAdvisorActor, {
-      writableExactPaths: new Set(parseCsv(firstEnv("CML_PUBLIC_MCP_PA_WRITABLE_EXACT_PATHS"))),
-      writablePathPrefixes: parseCsv(firstEnv("CML_PUBLIC_MCP_PA_WRITABLE_PATH_PREFIXES")),
-      writablePathSuffixes: parseCsv(firstEnv("CML_PUBLIC_MCP_PA_WRITABLE_PATH_SUFFIXES")),
-      allowWritableSuffixPaths: firstEnv("CML_PUBLIC_MCP_PA_ALLOW_WRITABLE_SUFFIX_PATHS") === "1",
-      allowAllWritablePaths: firstEnv("CML_PUBLIC_MCP_PA_ALLOW_ALL_WRITABLE_PATHS") === "1",
-      assumedRole: firstEnv("CML_PUBLIC_MCP_PA_ASSUMED_ROLE"),
-      invokedSkillRef: firstEnv("CML_PUBLIC_MCP_PA_INVOKED_SKILL_REF"),
-      policyRef: firstEnv("CML_PUBLIC_MCP_PA_POLICY_REF"),
-      governingContractKey: firstEnv("CML_PUBLIC_MCP_PA_GOVERNING_CONTRACT_KEY"),
-      requireInterpretationForVaultMutations: firstEnv("CML_PUBLIC_MCP_PA_REQUIRE_INTERPRETATION_FOR_VAULT_MUTATIONS") === "1",
-    });
+  for (const slot of profileSlots()) {
+    const entry = profileFromSlot(slot);
+    if (entry) profiles.set(entry.actor, entry.profile);
   }
   return profiles.size > 0 ? profiles : undefined;
 }

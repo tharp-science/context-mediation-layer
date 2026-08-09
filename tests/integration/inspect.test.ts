@@ -275,6 +275,7 @@ describe("inspectInterpretation", () => {
       id: interpRes.data.id as number,
       newTitle: "Revised understanding",
       reason: "Original was incomplete",
+      callerActorId: 1,
     });
 
     const result = await inspectInterpretation(interpRes.data.id as number, service);

@@ -56,14 +56,16 @@ if (command === "create") {
     chmodSync(obsidianBin, 0o755);
 
     repo = new InMemoryGovernanceRepository();
-    await repo.registerScope("default", actorId(0));
-    await repo.registerActor({
+    // Self-attributed: the first actor in a fresh, actor-less repository has nothing
+    // else to name as its caller (actorId(1) is the id this insert always receives).
+    const bootstrapActor = await repo.registerActor({
       name: "mcp-agent",
       role: "agent",
       provider: "openai-codex",
       capabilityNamespace: "mcp-test",
       defaultScope: "default",
-    }, actorId(0));
+    }, actorId(1));
+    await repo.registerScope("default", bootstrapActor.id);
     server = new CmlMcpServer({
       repository: repo,
       defaultActor: "mcp-agent",
@@ -484,7 +486,11 @@ if (command === "create") {
       jsonrpc: "2.0",
       id: 42,
       method: "tools/call",
-      params: { name: "event_list", arguments: { limit: 10 } },
+      // limit raised from 10: registerScope/registerActor/registerDomain now emit events
+      // too (Task 5), so the fixture's setup calls push more events onto the list before
+      // this test's own interpretation_superseded — a plain event count change, not a
+      // pagination behaviour this test is meant to pin.
+      params: { name: "event_list", arguments: { limit: 50 } },
     });
     expect(events?.result).toMatchObject({
       isError: false,

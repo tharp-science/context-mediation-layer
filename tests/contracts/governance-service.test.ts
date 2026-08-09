@@ -82,6 +82,7 @@ describe("GovernanceService", () => {
         role: "agent",
         provider: "openai-codex",
         capabilityNamespace: "build",
+        callerActorId: 1,
       });
       if (!actor.ok) throw new Error("actor register failed");
       const intent = await svc.registerIntent({ description: "Parent", source: "test", actorId: actor.data.id });
@@ -278,6 +279,7 @@ describe("GovernanceService", () => {
         id: interp.data.id,
         newTitle: "Revised",
         reason: "incomplete",
+        callerActorId: 1,
       });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
@@ -354,7 +356,7 @@ describe("GovernanceService", () => {
       if (!c.ok) return;
       expect(c.data.status).toBe("active");
 
-      const release = await service.releaseClaim({ id: c.data.id, reason: "Done" });
+      const release = await service.releaseClaim({ id: c.data.id, callerActorId: 1, reason: "Done" });
       expect(release.ok).toBe(true);
 
       const list = await service.listClaims({ status: "released" });
@@ -452,11 +454,15 @@ describe("GovernanceService", () => {
 
   describe("contracts", () => {
     async function seedCustodian() {
+      // First actor in this test's fresh repo (see beforeEach) — self-attributed, per
+      // the same reasoning as governance-invariants.test.ts's "superseding attributes..."
+      // test: nothing else in a brand-new repository could have caused this write.
       const actor = await service.registerActor({
         name: "contract-custodian",
         role: "agent",
         provider: "openai-codex",
         capabilityNamespace: "build",
+        callerActorId: 1,
       });
       if (!actor.ok) throw new Error("actor register failed");
       return actor.data;
@@ -572,6 +578,7 @@ describe("GovernanceService", () => {
       const role = await service.registerRole({
         name: "project-advisor",
         contractKey: "role:project-advisor",
+        callerActorId: custodian.id,
       });
       expect(role.ok).toBe(true);
       if (!role.ok) return;
@@ -583,6 +590,7 @@ describe("GovernanceService", () => {
         provider: "openai-codex",
         capabilityNamespace: "build",
         contractKey: "actor:missing",
+        callerActorId: custodian.id,
       });
       expect(missing.ok).toBe(false);
       if (missing.ok) return;
@@ -596,11 +604,13 @@ describe("GovernanceService", () => {
         scope: "default",
         name: "CML Governance",
         concern: "Framework contracts",
+        callerActorId: custodian.id,
       });
       const secondDomain = await service.registerDomain({
         scope: "default",
         name: "Reading Practice",
         concern: "Reading and synthesis contracts",
+        callerActorId: custodian.id,
       });
       if (!firstDomain.ok || !secondDomain.ok) throw new Error("domain register failed");
 
@@ -681,6 +691,7 @@ describe("GovernanceService", () => {
         provider: "local-agent",
         actorType: "Build Agent",
         capabilityNamespace: "build",
+        callerActorId: custodian.id,
       });
       expect(actor.ok).toBe(true);
       if (!actor.ok) return;
@@ -720,11 +731,14 @@ describe("GovernanceService", () => {
 
   describe("actors", () => {
     it("registerActor and listActors", async () => {
+      // First actor in this test's fresh repo — self-attributed (see the note on
+      // seedCustodian above).
       const result = await service.registerActor({
         name: "test-actor",
         role: "agent",
         provider: "claude-code",
         capabilityNamespace: "framework",
+        callerActorId: 1,
       });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
@@ -743,11 +757,13 @@ describe("GovernanceService", () => {
         role: "agent",
         provider: "test",
         capabilityNamespace: "test",
+        callerActorId: 1,
       });
       if (!reg.ok) throw new Error("register failed");
 
       const result = await service.updateActor({
         id: reg.data.id,
+        callerActorId: reg.data.id,
         sessionId: "session-123",
       });
       expect(result.ok).toBe(true);
@@ -765,6 +781,7 @@ describe("GovernanceService", () => {
         contractRef: "vault/contracts/context-provisioned.md",
         contextRef: "vault/context-packs/context-provisioned.md",
         contextPolicy: "active intent + linked reports",
+        callerActorId: 1,
       });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
@@ -785,6 +802,7 @@ describe("GovernanceService", () => {
         role: "agent",
         provider: "openai-chatgpt-5.5-high-reasoning",
         capabilityNamespace: "global advisory",
+        callerActorId: 1,
       });
       expect(actor.ok).toBe(true);
       if (!actor.ok) return;
@@ -814,6 +832,7 @@ describe("GovernanceService", () => {
         name: "project-advisor",
         contractKey: "role:project-advisor",
         description: "Approved agent and reviewed reasoning profile only.",
+        callerActorId: actor.data.id,
       });
       expect(role.ok).toBe(true);
       if (!role.ok) return;
@@ -868,6 +887,7 @@ describe("GovernanceService", () => {
         role: "agent",
         provider: "openai-codex",
         capabilityNamespace: "build",
+        callerActorId: 1,
       });
       if (!actor.ok) throw new Error("actor register failed");
 
@@ -913,6 +933,7 @@ describe("GovernanceService", () => {
         provider: "openai-codex",
         capabilityNamespace: "build",
         status: "retired",
+        callerActorId: 1,
       });
       if (!actor.ok) throw new Error("actor register failed");
 
@@ -938,6 +959,7 @@ describe("GovernanceService", () => {
         role: "agent",
         provider: "openai-codex",
         capabilityNamespace: "build",
+        callerActorId: 1,
       });
       if (!actor.ok) throw new Error("actor register failed");
 
@@ -972,6 +994,7 @@ describe("GovernanceService", () => {
         role: "agent",
         provider: "openai-codex",
         capabilityNamespace: "build",
+        callerActorId: 1,
       });
       if (!actor.ok) throw new Error("actor register failed");
 
@@ -993,6 +1016,7 @@ describe("GovernanceService", () => {
         role: "agent",
         provider: "openai-codex",
         capabilityNamespace: "build",
+        callerActorId: 1,
       });
       if (!actor.ok) throw new Error("actor register failed");
       const intent = await svc.registerIntent({ description: "P", source: "test", actorId: actor.data.id });
@@ -1015,7 +1039,7 @@ describe("GovernanceService", () => {
       });
       if (!interp.ok) throw new Error("interp failed");
       const result = await svc.supersedeInterpretation({
-        id: interp.data.id, newTitle: "second", reason: "revised",
+        id: interp.data.id, newTitle: "second", reason: "revised", callerActorId: 1,
       });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
@@ -1052,9 +1076,9 @@ describe("GovernanceService", () => {
 
   describe("scopes", () => {
     it("registerScope and listScopes", async () => {
-      await service.registerScope({ scope: "default" });
-      await service.registerScope({ scope: "product" });
-      await service.registerScope({ scope: "default" }); // duplicate — should be idempotent
+      await service.registerScope({ scope: "default", callerActorId: 1 });
+      await service.registerScope({ scope: "product", callerActorId: 1 });
+      await service.registerScope({ scope: "default", callerActorId: 1 }); // duplicate — should be idempotent
 
       const result = await service.listScopes();
       expect(result.ok).toBe(true);
@@ -1062,6 +1086,81 @@ describe("GovernanceService", () => {
       expect(result.data).toHaveLength(2);
       expect(result.data).toContain("default");
       expect(result.data).toContain("product");
+    });
+  });
+
+  // ----------------------------------------------------------
+  // Caller identity (Task 5)
+  // ----------------------------------------------------------
+
+  describe("caller identity", () => {
+    it("registerScope emits an event naming the caller", async () => {
+      const repo = new InMemoryGovernanceRepository();
+      const svc = new GovernanceService(repo);
+      const result = await svc.registerScope({ scope: "audit-test", callerActorId: 1 });
+      expect(result.ok).toBe(true);
+
+      const events = await repo.listEvents({ entityTable: "scopes" });
+      expect(events.length).toBeGreaterThan(0);
+      expect(events[events.length - 1].actorId).toBe(1);
+    });
+
+    it("registerDomain emits an event naming the caller", async () => {
+      const repo = new InMemoryGovernanceRepository();
+      const svc = new GovernanceService(repo);
+      const result = await svc.registerDomain({
+        scope: "default", name: "Test Domain", concern: "testing", callerActorId: 1,
+      });
+      expect(result.ok).toBe(true);
+
+      const events = await repo.listEvents({ entityTable: "domains" });
+      expect(events[events.length - 1].actorId).toBe(1);
+    });
+
+    it("registerActor emits an event naming the caller, not just the new actor's own identity", async () => {
+      const repo = new InMemoryGovernanceRepository();
+      const svc = new GovernanceService(repo);
+      // Seed a distinct provisioning actor first, so the assertion below can tell
+      // "caller" apart from "subject" — registerActor's own id would trivially pass a
+      // weaker check.
+      const provisioner = await svc.registerActor({
+        name: "provisioner", role: "human", provider: "human", capabilityNamespace: "ops", callerActorId: 1,
+      });
+      if (!provisioner.ok) throw new Error("provisioner register failed");
+
+      const result = await svc.registerActor({
+        name: "provisioned-agent", role: "agent", provider: "openai-codex",
+        capabilityNamespace: "build", callerActorId: provisioner.data.id,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+
+      const events = await repo.listEvents({ entityTable: "actors" });
+      const registered = events.filter((e) => e.eventType === "actor_registered" && e.entityId === result.data.id);
+      expect(registered[registered.length - 1].actorId).toBe(provisioner.data.id);
+    });
+
+    it("updateActor emits an event naming the caller, not the actor being updated", async () => {
+      const repo = new InMemoryGovernanceRepository();
+      const svc = new GovernanceService(repo);
+      const admin = await svc.registerActor({
+        name: "admin", role: "human", provider: "human", capabilityNamespace: "ops", callerActorId: 1,
+      });
+      if (!admin.ok) throw new Error("admin register failed");
+      const subject = await svc.registerActor({
+        name: "managed-agent", role: "agent", provider: "openai-codex",
+        capabilityNamespace: "build", callerActorId: admin.data.id,
+      });
+      if (!subject.ok) throw new Error("subject register failed");
+
+      const result = await svc.updateActor({
+        id: subject.data.id, callerActorId: admin.data.id, sessionId: "session-abc",
+      });
+      expect(result.ok).toBe(true);
+
+      const events = await repo.listEvents({ entityTable: "actors" });
+      const updated = events.filter((e) => e.eventType === "actor_updated" && e.entityId === subject.data.id);
+      expect(updated[updated.length - 1].actorId).toBe(admin.data.id);
     });
   });
 });

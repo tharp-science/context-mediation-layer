@@ -386,7 +386,75 @@ async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> 
   const service = new GovernanceService(repo);
   try {
     const scopes = await repo.listScopes();
-    if (!scopes.includes(scope)) requireOk(await service.registerScope({ scope }));
+    const scopeAlreadyExists = scopes.includes(scope);
+
+    // Every governed write now needs a real callerActorId, and an actor row is a
+    // precondition for emitting any event at all (events.actor_id is a NOT NULL FK).
+    // Actor resolution therefore has to happen before scope/domain registration, not
+    // after, so those calls have a real actor to name as caller.
+    let actor = await repo.getActorByName(actorName);
+    if (!actor) {
+      const existingActors = await repo.listActors();
+      if (existingActors.length > 0) {
+        // Some other actor already exists in this database (e.g. re-running `init` with
+        // a different --actor against an already-provisioned db); it caused this actor
+        // to be provisioned, so it is the caller.
+        actor = requireOk(await service.registerActor({
+          name: actorName,
+          role,
+          provider,
+          capabilityNamespace: config.data.actor?.capabilityNamespace ?? "local",
+          // 'default' is seeded unconditionally by SqliteGovernanceRepository on schema
+          // creation (ensureCoreSchema), so it always satisfies actors.default_scope's FK
+          // even when the target `scope` doesn't exist as a row yet. Reconciled below.
+          defaultScope: scopeAlreadyExists ? scope : "default",
+          status: "active",
+          description: "Default local operator created by CML init.",
+          callerActorId: existingActors[0].id,
+        }));
+      } else {
+        // True cold start: this is the first actor in a brand-new database, so there is
+        // no other actor to name as the caller of its own "actor_registered" event.
+        //
+        // JUDGEMENT CALL (flagged for controller review — see task-5-report.md): the
+        // actor being created is recorded as the caller of its own genesis event,
+        // analogous to a self-signed root certificate or a parentless genesis commit.
+        // This is a self-attribution decision, not a synthetic "system actor" identity;
+        // Task 5's brief did not anticipate this bootstrap ordering problem, and the
+        // fix is confined to this function.
+        //
+        // Mechanically: the repository's registerActor() inserts the actor row and then
+        // emits its event in the same call, using whatever callerActorId it's given —
+        // there's no way to learn the row's real id before the event fires. The actors
+        // table is verified empty (existingActors.length === 0) and nothing in this
+        // codebase ever deletes an actor, so SQLite's AUTOINCREMENT is guaranteed to
+        // assign id 1 to this insert. The assertion below fails loudly instead of
+        // silently mis-attributing if that assumption is ever wrong.
+        const predictedSelfId = 1;
+        actor = requireOk(await service.registerActor({
+          name: actorName,
+          role,
+          provider,
+          capabilityNamespace: config.data.actor?.capabilityNamespace ?? "local",
+          defaultScope: scopeAlreadyExists ? scope : "default",
+          status: "active",
+          description: "Default local operator created by CML init.",
+          callerActorId: predictedSelfId,
+        }));
+        if (actor.id !== predictedSelfId) {
+          throw new Error(
+            `cml init: bootstrap self-attribution assumption violated (expected actor id ${predictedSelfId}, got ${actor.id})`
+          );
+        }
+      }
+    }
+
+    if (!scopeAlreadyExists) {
+      requireOk(await service.registerScope({ scope, callerActorId: actor.id }));
+      if (actor.defaultScope !== scope) {
+        actor = requireOk(await service.updateActor({ id: actor.id, defaultScope: scope, callerActorId: actor.id }));
+      }
+    }
 
     const domains = await repo.listDomains();
     let domain = domains.find((item) => item.scope === scope && item.name === "Coordination");
@@ -395,19 +463,7 @@ async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> 
         scope,
         name: "Coordination",
         concern: "Mediation surface, intent state, contracts, actions, claims, and reports.",
-      }));
-    }
-
-    let actor = await repo.getActorByName(actorName);
-    if (!actor) {
-      actor = requireOk(await service.registerActor({
-        name: actorName,
-        role,
-        provider,
-        capabilityNamespace: config.data.actor?.capabilityNamespace ?? "local",
-        defaultScope: scope,
-        status: "active",
-        description: "Default local operator created by CML init.",
+        callerActorId: actor.id,
       }));
     }
 
@@ -449,6 +505,7 @@ async function handleInit(flags: Flags, config: ConfigBundle): Promise<unknown> 
         name: "operator",
         contractKey: rootKey,
         description: "Local operator role for setup, QA, and pilot operations.",
+        callerActorId: actor.id,
       }));
     }
 
@@ -632,6 +689,7 @@ async function handleContractImport(ctx: CliContext, flags: Flags): Promise<unkn
   for (const role of asObjectArray(payload.roles, "roles")) {
     imported.push(await ctx.service.registerRole({
       name: stringProp(role, "name", true) as string,
+      callerActorId: ctx.actor.id,
       status: stringProp(role, "status") as any,
       contractKey: stringProp(role, "contractKey"),
       contractRef: stringProp(role, "contractRef"),
@@ -758,6 +816,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         id: Number(id),
         newTitle: requiredFlag(flags, "title"),
         reason: requiredFlag(flags, "reason"),
+        callerActorId: ctx.actor.id,
         newScopeAssumption: flag(flags, "scope-assumption"),
         newStatus: enumFlag(flags, "status", INTERPRETATION_STATUSES),
       });
@@ -800,6 +859,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
     if (op === "release") {
       return ctx.service.releaseClaim({
         id: Number(id),
+        callerActorId: ctx.actor.id,
         reason: flag(flags, "reason"),
       });
     }
@@ -835,11 +895,13 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         contextRef: flag(flags, "context-ref"),
         contextPolicy: flag(flags, "context-policy"),
         description: flag(flags, "description"),
+        callerActorId: ctx.actor.id,
       });
     }
     if (op === "update") {
       return ctx.service.updateActor({
         id: Number(id),
+        callerActorId: ctx.actor.id,
         name: flag(flags, "name"),
         role: enumFlag(flags, "role", ["human", "agent"] as const),
         provider: flag(flags, "provider"),
@@ -858,6 +920,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
     if (op === "retire") {
       return ctx.service.retireActor({
         id: Number(id),
+        callerActorId: ctx.actor.id,
         reason: flag(flags, "reason"),
       });
     }
@@ -873,6 +936,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
     if (op === "register") {
       return ctx.service.registerRole({
         name: requiredFlag(flags, "name"),
+        callerActorId: ctx.actor.id,
         status: enumFlag(flags, "status", ROLE_STATUSES) as any,
         contractKey: flag(flags, "contract-key"),
         contractRef: flag(flags, "contract-ref"),
@@ -1056,6 +1120,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         name: requiredFlag(flags, "name"),
         concern: requiredFlag(flags, "concern"),
         notionPageId: flag(flags, "notion-page-id"),
+        callerActorId: ctx.actor.id,
       });
     }
     if (op === "list") return ctx.service.listDomains();
@@ -1063,7 +1128,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
   }
 
   if (group === "scope") {
-    if (op === "register") return ctx.service.registerScope({ scope: requiredFlag(flags, "name") });
+    if (op === "register") return ctx.service.registerScope({ scope: requiredFlag(flags, "name"), callerActorId: ctx.actor.id });
     if (op === "list") return ctx.service.listScopes();
   }
 

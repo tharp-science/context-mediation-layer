@@ -922,14 +922,16 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(claimFromRow);
   }
 
-  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
-  // adds both callerActorId to the service call site and the emitEvent call here.
   async registerDomain(domain: Omit<Domain, "id">, callerActorId: ActorId): Promise<Domain> {
     const result = this.db.prepare(
       "INSERT INTO domains (scope, name, concern, notion_page_id) VALUES (?, ?, ?, ?)"
     ).run(domain.scope, domain.name, domain.concern, domain.notionPageId ?? null);
     const created = await this.getDomain(domainId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted domain could not be read back");
+    await this.emitEvent("domain_registered", "domains", created.id, callerActorId, {
+      scope: created.scope,
+      snapshot: created as unknown as Record<string, unknown>,
+    });
     return created;
   }
 
@@ -1106,8 +1108,6 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     }
   }
 
-  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
-  // adds both callerActorId to the service call site and the emitEvent call here.
   async registerActor(actor: ActorCreate, callerActorId: ActorId): Promise<Actor> {
     const result = this.db.prepare(
       `INSERT INTO actors
@@ -1132,11 +1132,13 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     );
     const created = await this.getActor(actorId(Number(result.lastInsertRowid)));
     if (!created) throw new Error("Inserted actor could not be read back");
+    await this.emitEvent("actor_registered", "actors", created.id, callerActorId, {
+      scope: created.defaultScope,
+      snapshot: created as unknown as Record<string, unknown>,
+    });
     return created;
   }
 
-  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
-  // adds both callerActorId to the service call site and the emitEvent call here.
   async updateActor(
     id: ActorId,
     updates: Partial<Omit<Actor, "id" | "createdAt">>,
@@ -1169,6 +1171,10 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     );
     const updated = await this.getActor(id);
     if (!updated) return { code: "NOT_FOUND", message: `Actor ${id} not found after update` };
+    await this.emitEvent("actor_updated", "actors", id, callerActorId, {
+      scope: updated.defaultScope,
+      snapshot: updated as unknown as Record<string, unknown>,
+    });
     return updated;
   }
 
@@ -1198,8 +1204,6 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(actorFromRow);
   }
 
-  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
-  // adds both callerActorId to the service call site and the emitEvent call here.
   async registerRole(role: GovernanceRoleCreate, callerActorId: ActorId): Promise<GovernanceRole> {
     const result = this.db.prepare(
       `INSERT INTO roles (name, status, contract_key, contract_ref, context_ref, policy_ref, description)
@@ -1223,6 +1227,9 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     );
     const created = await this.getRoleByName(role.name);
     if (!created) throw new Error("Inserted role could not be read back");
+    await this.emitEvent("role_registered", "roles", created.id, callerActorId, {
+      snapshot: created as unknown as Record<string, unknown>,
+    });
     return created;
   }
 
@@ -1386,10 +1393,20 @@ export class SqliteGovernanceRepository implements GovernanceRepository {
     return rows.map(actorSessionFromRow);
   }
 
-  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
-  // adds both callerActorId to the service call site and the emitEvent call here.
   async registerScope(scope: string, callerActorId: ActorId): Promise<string> {
-    this.db.prepare("INSERT OR IGNORE INTO scopes (name, description) VALUES (?, ?)").run(scope, scope);
+    const result = this.db.prepare("INSERT OR IGNORE INTO scopes (name, description) VALUES (?, ?)").run(scope, scope);
+    // changes === 0 means the row already existed (INSERT OR IGNORE was a no-op) —
+    // matches the in-memory implementation's re-registration-is-a-no-op behaviour, and
+    // avoids emitting a scope_registered event (with a fabricated id) for a scope that
+    // isn't actually new.
+    if (result.changes > 0) {
+      const row = this.db.prepare("SELECT id FROM scopes WHERE name = ?").get(scope) as Row | undefined;
+      if (!row) throw new Error("Inserted scope could not be read back");
+      await this.emitEvent("scope_registered", "scopes", Number(row.id), callerActorId, {
+        scope,
+        snapshot: { scope },
+      });
+    }
     return scope;
   }
 

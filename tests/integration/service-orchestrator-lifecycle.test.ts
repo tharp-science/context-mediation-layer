@@ -59,6 +59,7 @@ describe("Service → Orchestrator Lifecycle", () => {
       provider: "claude-code",
       capabilityNamespace: "runtime.invoke",
       defaultScope: "default",
+      callerActorId: 1,
     });
     expect(actorRes.ok).toBe(true);
     if (!actorRes.ok) throw new Error("unreachable");
@@ -213,6 +214,7 @@ describe("Service → Orchestrator Lifecycle", () => {
       id: interpRes.data.id as number,
       newTitle: "Run targeted disk check only",
       reason: "Full suite is overkill for this case",
+      callerActorId: 1,
     });
     expect(supersedeRes.ok).toBe(true);
     if (!supersedeRes.ok) throw new Error("unreachable");
@@ -346,7 +348,7 @@ describe("Service → Orchestrator Lifecycle", () => {
 
   it("an alternate organisation uses identical service and orchestrator paths", async () => {
     // Register an alternate scope
-    await service.registerScope({ scope: "consulting" });
+    await service.registerScope({ scope: "consulting", callerActorId: 1 });
 
     const intentRes = await service.registerIntent({
       description: "Prepare client deliverable for Q2 review",

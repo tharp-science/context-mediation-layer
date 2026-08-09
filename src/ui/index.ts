@@ -315,11 +315,12 @@ async function handleWrite(request: IncomingMessage, url: URL, response: ServerR
   const supersedeMatch = url.pathname.match(/^\/api\/interpretations\/(\d+)\/supersede$/);
   if (request.method === "POST" && supersedeMatch) {
     const body = await readJsonBody(request);
-    await requireDefaultActor(context);
+    const actor = await requireDefaultActor(context);
     const result = await context.service.supersedeInterpretation({
       id: Number(supersedeMatch[1]),
       newTitle: requiredString(body.newTitle, "newTitle"),
       reason: requiredString(body.reason, "reason"),
+      callerActorId: actor.id as number,
       newScopeAssumption: optionalBodyString(body.newScopeAssumption, "newScopeAssumption"),
       newStatus: optionalInterpretationStatus(body.newStatus),
     });
@@ -392,10 +393,11 @@ async function handleWrite(request: IncomingMessage, url: URL, response: ServerR
 
   const releaseClaimMatch = url.pathname.match(/^\/api\/claims\/(\d+)\/release$/);
   if (request.method === "POST" && releaseClaimMatch) {
-    await requireDefaultActor(context);
+    const actor = await requireDefaultActor(context);
     const body = await readJsonBody(request);
     const result = await context.service.releaseClaim({
       id: Number(releaseClaimMatch[1]),
+      callerActorId: actor.id as number,
       reason: optionalBodyString(body.reason, "reason"),
     });
     writeJson(response, result.ok ? 200 : 400, result);

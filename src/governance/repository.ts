@@ -297,6 +297,10 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   private nextEventId = 1;
   private nextExpertiseSignalId = 1;
   private nextReportId = 1;
+  // Starts at 2: id 1 is reserved for the 'default' scope seeded below, matching
+  // SqliteGovernanceRepository's ensureCoreSchema, which INSERT OR IGNOREs a 'default'
+  // scope row into every fresh database it opens.
+  private nextScopeId = 2;
 
   // ============================================================
   // Intents
@@ -609,12 +613,14 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   // Domains
   // ============================================================
 
-  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
-  // adds both callerActorId to the service call site and the emitEvent call here.
   async registerDomain(domain: Omit<Domain, "id">, callerActorId: ActorId): Promise<Domain> {
     const id = domainId(this.nextDomainId++);
     const record: Domain = { ...domain, id };
     this.domains.set(id, record);
+    await this.emitEvent("domain_registered", "domains", id, callerActorId, {
+      scope: record.scope,
+      snapshot: { ...record } as unknown as Record<string, unknown>,
+    });
     return record;
   }
 
@@ -768,8 +774,6 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   // Actors
   // ============================================================
 
-  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
-  // adds both callerActorId to the service call site and the emitEvent call here.
   async registerActor(actor: ActorCreate, callerActorId: ActorId): Promise<Actor> {
     const now = new Date();
     const id = actorId(this.nextActorId++);
@@ -781,11 +785,13 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       updatedAt: now,
     };
     this.actors.set(id, record);
+    await this.emitEvent("actor_registered", "actors", id, callerActorId, {
+      scope: record.defaultScope,
+      snapshot: { ...record } as unknown as Record<string, unknown>,
+    });
     return record;
   }
 
-  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
-  // adds both callerActorId to the service call site and the emitEvent call here.
   async updateActor(
     id: ActorId,
     updates: Partial<Omit<Actor, "id" | "createdAt">>,
@@ -795,6 +801,10 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     if (!actor) return { code: "NOT_FOUND", message: `Actor ${id} not found` };
     const updated: Actor = { ...actor, ...updates, id, updatedAt: new Date() };
     this.actors.set(id, updated);
+    await this.emitEvent("actor_updated", "actors", id, callerActorId, {
+      scope: updated.defaultScope,
+      snapshot: { ...updated } as unknown as Record<string, unknown>,
+    });
     return updated;
   }
 
@@ -813,8 +823,6 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
     return result;
   }
 
-  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
-  // adds both callerActorId to the service call site and the emitEvent call here.
   async registerRole(role: GovernanceRoleCreate, callerActorId: ActorId): Promise<GovernanceRole> {
     const now = new Date();
     const id = roleId(this.nextRoleId++);
@@ -826,6 +834,9 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
       updatedAt: now,
     };
     this.roles.set(id, record);
+    await this.emitEvent("role_registered", "roles", id, callerActorId, {
+      snapshot: { ...record } as unknown as Record<string, unknown>,
+    });
     return record;
   }
 
@@ -945,17 +956,28 @@ export class InMemoryGovernanceRepository implements GovernanceRepository {
   // Scopes
   // ============================================================
 
-  private scopes = new Set<string>();
+  // Maps scope name -> its synthetic autoincrement-style id, mirroring the SQLite
+  // implementation's `scopes.id`. Pre-seeded with 'default' (no event — see
+  // SqliteGovernanceRepository.ensureCoreSchema, which does the same on schema
+  // creation) so both implementations start with, and number, scopes identically.
+  // Re-registering an existing scope is a silent no-op (matching SQLite's
+  // `INSERT OR IGNORE`), so no event fires for it.
+  private scopes = new Map<string, number>([["default", 1]]);
 
-  // callerActorId: reserved, currently unused — this method emits no event yet. Task 5
-  // adds both callerActorId to the service call site and the emitEvent call here.
   async registerScope(scope: string, callerActorId: ActorId): Promise<string> {
-    this.scopes.add(scope);
+    if (!this.scopes.has(scope)) {
+      const id = this.nextScopeId++;
+      this.scopes.set(scope, id);
+      await this.emitEvent("scope_registered", "scopes", id, callerActorId, {
+        scope,
+        snapshot: { scope },
+      });
+    }
     return scope;
   }
 
   async listScopes(): Promise<string[]> {
-    return Array.from(this.scopes);
+    return Array.from(this.scopes.keys());
   }
 
   // ============================================================

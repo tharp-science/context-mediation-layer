@@ -592,17 +592,23 @@ describe("Event attribution", () => {
   it("superseding attributes the event to the superseder, not the original author", async () => {
     for (const repo of repositories()) {
       try {
-        const domain = await repo.registerDomain(
-          { scope: "default", name: "Attribution domain", concern: "test" },
-          actorId(0)
-        );
+        // `repo` is a brand-new, actor-less repository (see `repositories()` above), and
+        // registerActor now emits an event that requires a real, already-existing caller
+        // (events.actor_id is a NOT NULL FK in the SQLite implementation). The first actor
+        // in a fresh repository has nothing else to name as its caller, so it is recorded
+        // as its own — actorId(1) is the id this insert is guaranteed to receive, since
+        // both repository implementations start their autoincrement/counter at 1.
         const author = await repo.registerActor(
           { name: "attribution-author", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
-          actorId(0)
+          actorId(1)
+        );
+        const domain = await repo.registerDomain(
+          { scope: "default", name: "Attribution domain", concern: "test" },
+          author.id
         );
         const superseder = await repo.registerActor(
           { name: "attribution-superseder", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
-          actorId(0)
+          author.id
         );
 
         const intent = await repo.createIntent(
@@ -656,9 +662,11 @@ describe("Origin immutability", () => {
   it("updateIntent does not accept originKind in updates", async () => {
     for (const repo of repositories()) {
       try {
+        // Self-attributed: the first actor in a fresh, actor-less repository (see the
+        // comment on the "superseding attributes..." test above for why actorId(1)).
         const caller = await repo.registerActor(
           { name: "origin-immutability-caller", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
-          actorId(0)
+          actorId(1)
         );
 
         const intent = await repo.createIntent(
@@ -693,9 +701,11 @@ describe("Origin immutability", () => {
   it("updateInterpretation does not accept originKind in updates", async () => {
     for (const repo of repositories()) {
       try {
+        // Self-attributed: the first actor in a fresh, actor-less repository (see the
+        // comment on the "superseding attributes..." test above for why actorId(1)).
         const caller = await repo.registerActor(
           { name: "interp-origin-immutability-caller", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
-          actorId(0)
+          actorId(1)
         );
         const domain = await repo.registerDomain(
           { scope: "default", name: "interp-origin-immutability-domain", concern: "test" },
@@ -747,9 +757,11 @@ describe("SqliteGovernanceRepository row mapping", () => {
   it("reads an invalid stored origin_kind back as proxy", async () => {
     const repo = new SqliteGovernanceRepository(":memory:");
     try {
+      // Self-attributed: the first actor in a fresh, actor-less repository (see the
+      // comment on the "superseding attributes..." test above for why actorId(1)).
       const caller = await repo.registerActor(
         { name: "row-mapping-caller", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
-        actorId(0)
+        actorId(1)
       );
 
       const intent = await repo.createIntent(
@@ -775,6 +787,46 @@ describe("SqliteGovernanceRepository row mapping", () => {
       expect(listed.find((i) => i.id === intent.id)?.originKind).toBe("proxy");
     } finally {
       repo.close();
+    }
+  });
+});
+
+// ============================================================
+// Cross-repository lockstep (Task 5): registerScope("default") must behave
+// identically in both implementations, since both pre-seed a 'default' scope
+// row (SqliteGovernanceRepository.ensureCoreSchema does this on schema
+// creation; InMemoryGovernanceRepository mirrors it in its field initializer).
+// Registering it again must be a no-op — no new event, no id bump — in both.
+// ============================================================
+
+describe("Scope registration lockstep", () => {
+  it("registerScope('default') is a no-op event-wise in both repositories, identically", async () => {
+    for (const repo of repositories()) {
+      try {
+        const author = await repo.registerActor(
+          { name: "scope-lockstep-actor", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
+          actorId(1)
+        );
+
+        // 'default' is already seeded by both implementations — re-registering it must
+        // not emit a second event.
+        await repo.registerScope("default", author.id);
+        const afterDefault = await repo.listEvents({ entityTable: "scopes" });
+        expect(afterDefault).toHaveLength(0);
+
+        // A genuinely new scope must emit exactly one event, in both implementations.
+        await repo.registerScope("fresh-scope", author.id);
+        const afterFresh = await repo.listEvents({ entityTable: "scopes" });
+        expect(afterFresh).toHaveLength(1);
+        expect(afterFresh[0].eventType).toBe("scope_registered");
+        expect(afterFresh[0].scope).toBe("fresh-scope");
+
+        const scopes = await repo.listScopes();
+        expect(scopes).toContain("default");
+        expect(scopes).toContain("fresh-scope");
+      } finally {
+        if (repo instanceof SqliteGovernanceRepository) repo.close();
+      }
     }
   });
 });

@@ -207,9 +207,12 @@ describe("origin_kind schema evolution against pre-existing databases", () => {
         expect(cols("actions").has("origin_kind")).toBe(true);
 
         // And the repository is fully functional end to end after evolution.
+        // Self-attributed: the fixture pre-seeds a 'default' scope row but no actors, so
+        // this is the first (and only) actor in the evolved db — nothing else could have
+        // caused its registration event. actorId(1) is the id this insert always receives.
         const actor = await repo.registerActor(
           { name: "evo-actor", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
-          actorId(0)
+          actorId(1)
         );
         await repo.registerDomain({ scope: "default", name: "evo-domain", concern: "test" }, actor.id);
         const intent = await repo.createIntent(
@@ -283,9 +286,11 @@ describe("unmandated_reason schema evolution against pre-existing databases", ()
 
       const repo = new SqliteGovernanceRepository(dbPath);
       try {
+        // Self-attributed: `seed`'s construction already ran ensureCoreSchema (pre-seeding
+        // 'default') but registered no actors, so this is the first actor in this db.
         const actor = await repo.registerActor(
           { name: "mandate-evo-actor", role: "agent", provider: "test", capabilityNamespace: "test", defaultScope: "default" },
-          actorId(0)
+          actorId(1)
         );
         const report = await repo.registerReport(
           {

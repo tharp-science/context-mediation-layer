@@ -78,13 +78,6 @@ export type ServiceResponse<T> = ServiceResult<T> | ServiceError;
 
 const SCHEMA_VERSION = 2;
 
-// registerActor, updateActor, registerRole, registerDomain and registerScope have no
-// caller identity flowing into them at all — Task 5 adds callerActorId to their service
-// params in the same change that makes these repository methods start emitting events.
-// Until then this placeholder satisfies the repository's required parameter; nothing
-// reads it, because none of these five methods emit an event yet.
-const UNATTRIBUTED_CALLER = toActorId(0);
-
 function success<T>(data: T, extra?: { count?: number; has_more?: boolean }): ServiceResult<T> {
   return { ok: true, data, meta: { schema_version: SCHEMA_VERSION, ...extra } };
 }
@@ -345,14 +338,10 @@ export class GovernanceService {
     id: number;
     newTitle: string;
     reason: string;
+    callerActorId: number;
     newScopeAssumption?: string;
     newStatus?: InterpretationStatus;
   }): Promise<ServiceResponse<{ old: Interpretation; replacement: Interpretation }>> {
-    // No caller identity reaches this method until Task 5 adds callerActorId to its
-    // params (it is one of the eight repository writes that had none before this task).
-    // Attribute the event to the interpretation's current author — the only actor in
-    // scope here — so behaviour through the service is unchanged by this task; the
-    // repository-level fix is what lets Task 5 name a real caller once it lands.
     const current = await this.repo.getInterpretation(toInterpretationId(params.id));
     if (!current) return fail("NOT_FOUND", `Interpretation ${params.id} not found`);
 
@@ -362,7 +351,7 @@ export class GovernanceService {
       params.reason,
       params.newScopeAssumption,
       params.newStatus,
-      current.actorId,
+      toActorId(params.callerActorId),
       this.origin
     );
     if (isError(result)) return fail(result.code, result.message);
@@ -485,16 +474,13 @@ export class GovernanceService {
 
   async releaseClaim(params: {
     id: number;
+    callerActorId: number;
     reason?: string;
   }): Promise<ServiceResponse<{ released: true }>> {
-    // No caller identity reaches this method until Task 5 adds callerActorId to its
-    // params (it is one of the eight repository writes that had none before this task).
-    // Attribute the event to the claim's current holder — the only actor in scope here —
-    // so behaviour through the service is unchanged by this task.
     const claim = await this.repo.getClaim(params.id as ClaimId);
     if (!claim) return fail("NOT_FOUND", `Claim ${params.id} not found`);
 
-    const result = await this.repo.releaseClaim(params.id as ClaimId, params.reason, claim.actorId);
+    const result = await this.repo.releaseClaim(params.id as ClaimId, params.reason, toActorId(params.callerActorId));
     if (isError(result)) return fail(result.code, result.message);
     return success({ released: true });
   }
@@ -776,6 +762,7 @@ export class GovernanceService {
     contextRef?: string;
     contextPolicy?: string;
     description?: string;
+    callerActorId: number;
   }): Promise<ServiceResponse<Actor>> {
     if (params.contractKey != null) {
       const contractError = await this.requireActiveContractKey(params.contractKey);
@@ -801,14 +788,13 @@ export class GovernanceService {
       contextRef: params.contextRef,
       contextPolicy: params.contextPolicy,
       description: params.description,
-    // No caller identity reaches this method until Task 5 adds callerActorId — see
-    // UNATTRIBUTED_CALLER above.
-    }, UNATTRIBUTED_CALLER);
+    }, toActorId(params.callerActorId));
     return success(actor);
   }
 
   async updateActor(params: {
     id: number;
+    callerActorId: number;
     name?: string;
     role?: "human" | "agent";
     provider?: string;
@@ -849,9 +835,7 @@ export class GovernanceService {
     if (params.contextPolicy !== undefined) updates.contextPolicy = params.contextPolicy;
     if (params.description !== undefined) updates.description = params.description;
 
-    // No caller identity reaches this method until Task 5 adds callerActorId — see
-    // UNATTRIBUTED_CALLER above.
-    const result = await this.repo.updateActor(toActorId(params.id), updates, UNATTRIBUTED_CALLER);
+    const result = await this.repo.updateActor(toActorId(params.id), updates, toActorId(params.callerActorId));
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
   }
@@ -864,12 +848,10 @@ export class GovernanceService {
     return success(actor);
   }
 
-  async retireActor(params: { id: number; reason?: string }): Promise<ServiceResponse<Actor>> {
-    // No caller identity reaches this method until Task 5 adds callerActorId — see
-    // UNATTRIBUTED_CALLER above.
+  async retireActor(params: { id: number; callerActorId: number; reason?: string }): Promise<ServiceResponse<Actor>> {
     const result = await this.repo.updateActor(toActorId(params.id), {
       status: "retired",
-    }, UNATTRIBUTED_CALLER);
+    }, toActorId(params.callerActorId));
     if (isError(result)) return fail(result.code, result.message);
     return success(result);
   }
@@ -885,6 +867,7 @@ export class GovernanceService {
 
   async registerRole(params: {
     name: string;
+    callerActorId: number;
     status?: GovernanceRoleStatus;
     contractKey?: string;
     contractRef?: string;
@@ -896,9 +879,7 @@ export class GovernanceService {
       const contractError = await this.requireActiveContractKey(params.contractKey);
       if (contractError) return contractError;
     }
-    // No caller identity reaches this method until Task 5 adds callerActorId — see
-    // UNATTRIBUTED_CALLER above.
-    const role = await this.repo.registerRole(params, UNATTRIBUTED_CALLER);
+    const role = await this.repo.registerRole(params, toActorId(params.callerActorId));
     return success(role);
   }
 
@@ -1042,16 +1023,15 @@ export class GovernanceService {
     scope?: string;
     name: string;
     concern: string;
+    callerActorId: number;
     notionPageId?: string;
   }): Promise<ServiceResponse<Domain>> {
-    // No caller identity reaches this method until Task 5 adds callerActorId — see
-    // UNATTRIBUTED_CALLER above.
     const domain = await this.repo.registerDomain({
       scope: params.scope ?? "default",
       name: params.name,
       concern: params.concern,
       notionPageId: params.notionPageId,
-    }, UNATTRIBUTED_CALLER);
+    }, toActorId(params.callerActorId));
     return success(domain);
   }
 
@@ -1064,10 +1044,8 @@ export class GovernanceService {
   // Scopes
   // ----------------------------------------------------------
 
-  async registerScope(params: { scope: string }): Promise<ServiceResponse<{ scope: string }>> {
-    // No caller identity reaches this method until Task 5 adds callerActorId — see
-    // UNATTRIBUTED_CALLER above.
-    const scope = await this.repo.registerScope(params.scope, UNATTRIBUTED_CALLER);
+  async registerScope(params: { scope: string; callerActorId: number }): Promise<ServiceResponse<{ scope: string }>> {
+    const scope = await this.repo.registerScope(params.scope, toActorId(params.callerActorId));
     return success({ scope });
   }
 

@@ -129,7 +129,7 @@ export class CmlClient {
       update: (params: { id: number; reason: string; status?: InterpretationStatus; alignment?: InterpretationAlignment; resolverId?: number; resolveBy?: string; scopeAssumption?: string; sourceRef?: string }) =>
         this.withActor((actor) => this.service.updateInterpretation({ ...params, actorId: actor.id })),
       supersede: (params: { id: number; newTitle: string; reason: string; newScopeAssumption?: string; newStatus?: InterpretationStatus }) =>
-        this.withActor(() => this.service.supersedeInterpretation(params)),
+        this.withActor((actor) => this.service.supersedeInterpretation({ ...params, callerActorId: actor.id })),
     };
   }
 
@@ -151,7 +151,8 @@ export class CmlClient {
           actorId: actor.id,
           note: params.note,
         })),
-      release: (params: { id: number; reason?: string }) => this.withActor(() => this.service.releaseClaim(params)),
+      release: (params: { id: number; reason?: string }) =>
+        this.withActor((actor) => this.service.releaseClaim({ ...params, callerActorId: actor.id })),
       list: (params?: { entityTable?: string; entityId?: number; status?: ClaimStatus; limit?: number; offset?: number }) =>
         this.withActor(() => this.service.listClaims(params)),
     };
@@ -163,10 +164,11 @@ export class CmlClient {
       get: (params: { id?: number; name?: string }) => this.withActor(() => this.service.getActor(params)),
       list: (params?: { status?: ActorStatus; provider?: string }) => this.withActor(() => this.service.listActors(params)),
       provision: (params: { name: string; role: "human" | "agent"; provider: string; actorType?: string; capabilityNamespace: string; defaultScope?: string; sessionId?: string; status?: ActorStatus; contractKey?: string; defaultContractKey?: string; contractRef?: string; contextRef?: string; contextPolicy?: string; description?: string }) =>
-        this.withActor(() => this.service.registerActor(params)),
+        this.withActor((actor) => this.service.registerActor({ ...params, callerActorId: actor.id })),
       update: (params: { id: number; name?: string; role?: "human" | "agent"; provider?: string; actorType?: string; capabilityNamespace?: string; defaultScope?: string; sessionId?: string; status?: ActorStatus; contractKey?: string; defaultContractKey?: string; contractRef?: string; contextRef?: string; contextPolicy?: string; description?: string }) =>
-        this.withActor(() => this.service.updateActor(params)),
-      retire: (params: { id: number; reason?: string }) => this.withActor(() => this.service.retireActor(params)),
+        this.withActor((actor) => this.service.updateActor({ ...params, callerActorId: actor.id })),
+      retire: (params: { id: number; reason?: string }) =>
+        this.withActor((actor) => this.service.retireActor({ ...params, callerActorId: actor.id })),
     };
   }
 
@@ -246,7 +248,7 @@ export class CmlClient {
   get domain() {
     return {
       register: (params: { scope?: string; name: string; concern: string; notionPageId?: string }) =>
-        this.withActor((actor) => this.service.registerDomain({ ...params, scope: params.scope ?? actor.defaultScope })),
+        this.withActor((actor) => this.service.registerDomain({ ...params, scope: params.scope ?? actor.defaultScope, callerActorId: actor.id })),
       get: (id: number) => this.withActor(() => this.service.getDomain(id)),
       list: () => this.withActor(() => this.service.listDomains()),
     };
@@ -254,7 +256,8 @@ export class CmlClient {
 
   get scope() {
     return {
-      register: (params: { scope: string }) => this.withActor(() => this.service.registerScope(params)),
+      register: (params: { scope: string }) =>
+        this.withActor((actor) => this.service.registerScope({ ...params, callerActorId: actor.id })),
       list: () => this.withActor(() => this.service.listScopes()),
     };
   }

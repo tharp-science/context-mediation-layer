@@ -178,7 +178,18 @@ the caller can escalate to someone specific rather than to nobody.
 ### 4. Provisioning lifecycle
 
 Update and archive for every entity; `unbindActorRole`; the contract supersession
-backtrace as a real query walking `actors.contract_key`, `actors.default_contract_key`,
+backtrace as a real query walking
+
+Also in scope, found while filing this design: **an interpretation cannot be
+re-domained.** `updateInterpretation` takes no `domainId`, and
+`supersedeInterpretation` copies `current.domainId`
+(`src/governance/sqlite-governance-repository.ts:716`), so a mis-filed domain can only
+be corrected by re-filing and superseding — which is what happened to INT-211, now
+pointing at INT-212. Either `updateInterpretation` accepts a domain with a reason, or
+`supersedeInterpretation` accepts an overriding one. The same check should be run
+across the other entities for fields that are set once and then unreachable.
+
+The backtrace query walks `actors.contract_key`, `actors.default_contract_key`,
 `roles.contract_key` into `actor_role_bindings`, plus child contracts via `parent_key`
 and `governing_contract_key`.
 

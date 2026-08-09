@@ -440,7 +440,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       scope: stringSchema("Optional scope override."),
       status: enumSchema(["draft", "active"], "Initial contract status."),
       governingContractKey: stringSchema("Optional active contract key authorizing this revision; advisory, not an ACL."),
-      mandateRef: stringSchema("Optional CML/INT/RPT/build mandate reference."),
+      mandateRef: stringSchema("Optional intent, interpretation, report, or build mandate reference."),
     }, ["key", "kind", "title", "body"]),
   },
   {
@@ -484,7 +484,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       status: enumSchema(["draft", "active"], "Replacement contract status."),
       domainId: numberSchema("Optional replacement domain owner/concern signpost."),
       governingContractKey: stringSchema("Optional replacement governing contract key."),
-      mandateRef: stringSchema("Optional CML/INT/RPT/build mandate reference."),
+      mandateRef: stringSchema("Optional intent, interpretation, report, or build mandate reference."),
     }, ["id", "body", "reason"]),
   },
   {
@@ -501,7 +501,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       parentKey: stringSchema("Optional parent contract key. Defaults to root:agent-bootstrap."),
       status: enumSchema(["draft", "active"], "Initial contract status."),
       governingContractKey: stringSchema("Optional active contract key authorizing this actor type contract."),
-      mandateRef: stringSchema("Optional CML/INT/RPT/build mandate reference."),
+      mandateRef: stringSchema("Optional intent, interpretation, report, or build mandate reference."),
     }, ["name", "body"]),
   },
   {
@@ -530,7 +530,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "vault_read",
     title: "Read Vault File",
-    description: "Read a vault vault file by vault-relative path.",
+    description: "Read a vault file by vault-relative path.",
     inputSchema: objectSchema({ actor: stringSchema("Stable CML actor name."), path: stringSchema("Vault-relative path.") }, ["path"]),
   },
   {
@@ -560,7 +560,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "vault_search",
     title: "Search Vault",
-    description: "Run bounded text search over the vault vault. Prefer path and limit for large vaults.",
+    description: "Run bounded text search over the vault. Prefer path and limit for large vaults.",
     inputSchema: objectSchema({
       actor: stringSchema("Stable CML actor name."),
       query: stringSchema("Search query."),
@@ -572,7 +572,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "vault_write",
     title: "Write Vault File",
-    description: "Write a vault vault file. Requires an intent mandate and logs a CML action.",
+    description: "Write a vault file. Requires an intent mandate and logs a governed action.",
     inputSchema: objectSchema({
       actor: stringSchema("Stable CML actor name."),
       intent: numberSchema("Mandating intent id."),
@@ -588,7 +588,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "vault_append",
     title: "Append Vault File",
-    description: "Append to a vault vault file. Requires an intent mandate and logs a CML action.",
+    description: "Append to a vault file. Requires an intent mandate and logs a governed action.",
     inputSchema: objectSchema({
       actor: stringSchema("Stable CML actor name."),
       intent: numberSchema("Mandating intent id."),
@@ -1176,11 +1176,11 @@ function requireEnv(name: string): string {
 }
 
 function publicMcpBaseUrl(env: NodeJS.ProcessEnv | undefined): string {
-  return env?.CML_PUBLIC_MCP_BASE_URL ?? DEFAULT_PUBLIC_MCP_BASE_URL;
+  return envValue("CML_PUBLIC_MCP_BASE_URL", env) ?? DEFAULT_PUBLIC_MCP_BASE_URL;
 }
 
 function uiPublicUrls(env: NodeJS.ProcessEnv | undefined): string[] {
-  return parseCsv(env?.CML_UI_PUBLIC_URLS);
+  return parseCsv(envValue("CML_UI_PUBLIC_URLS", env));
 }
 
 function parseCsv(value: string | undefined): string[] {

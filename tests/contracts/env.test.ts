@@ -59,7 +59,10 @@ describe("no call site bypasses the resolver", () => {
       .filter((f) => !f.endsWith(join("config", "env.ts")))
       .flatMap((f) => {
         const body = readFileSync(f, "utf8");
-        const hits = body.match(/(?:process\.env|\benv)\.CML_[A-Z0-9_]+/g) ?? [];
+        // Must also catch optional chaining (env?.CML_X), bracket access and quoted keys:
+        // the first version of this guard matched only `env.CML_X` and let two live
+        // bypasses through, one of which advertised a placeholder MCP URL on the host.
+        const hits = body.match(/(?:process\.env|\benv)\s*\??[.[]\s*"?CML_[A-Z0-9_]+/g) ?? [];
         return hits.map((h) => `${f}: ${h}`);
       });
 

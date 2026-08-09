@@ -482,6 +482,7 @@ function protectedResourceMetadata(request: IncomingMessage, options: OAuthOptio
     bearer_methods_supported: ["header"],
     scopes_supported: options.scopesSupported ?? DEFAULT_OAUTH_SCOPES,
     resource_name: "CML Public MCP",
+    ...(options.pilotIssuer ? { service_documentation: "CML pilot OAuth issuer; replace with production identity for non-pilot deployments." } : {}),
   };
 }
 
@@ -1317,6 +1318,22 @@ function parsePort(value: string | undefined, fallback: number): number {
   return port;
 }
 
+/**
+ * Refuse to start when OAuth protects the bridge but the upstream it forwards to
+ * is remote and unauthenticated.
+ *
+ * Exported so it can be tested directly. This check was dropped once by a
+ * three-way merge and only caught in review — the tell was `isLocalHttpUrl`
+ * being left with no callers. Without it the bridge starts happily and forwards
+ * OAuth-authenticated tool calls, `vault_write` among them, to an
+ * unauthenticated remote host.
+ */
+export function assertUpstreamProtected(oauthEnabled: boolean, upstreamToken: string | undefined, upstreamUrl: string): void {
+  if (oauthEnabled && !upstreamToken && !isLocalHttpUrl(upstreamUrl)) {
+    throw new Error("CML_PUBLIC_MCP_UPSTREAM_TOKEN is required when OAuth protects a non-local upstream MCP server");
+  }
+}
+
 function main(): void {
   const host = firstEnv("CML_PUBLIC_MCP_HOST") ?? "127.0.0.1";
   const port = parsePort(firstEnv("CML_PUBLIC_MCP_PORT"), 8788);
@@ -1324,15 +1341,18 @@ function main(): void {
   const oauth = oauthOptionsFromEnv(publicBaseUrl);
   const publicToken = firstEnv("CML_PUBLIC_MCP_TOKEN");
   const allowInsecure = firstEnv("CML_PUBLIC_MCP_ALLOW_INSECURE") === "1";
+  const upstreamUrl = firstEnv("CML_PUBLIC_MCP_UPSTREAM_URL") ?? "http://127.0.0.1:8787/mcp";
+  const upstreamToken = firstEnv("CML_PUBLIC_MCP_UPSTREAM_TOKEN");
   if (oauth && allowInsecure) {
     throw new Error("CML_PUBLIC_MCP_ALLOW_INSECURE must not be set when OAuth is enabled");
   }
+  assertUpstreamProtected(Boolean(oauth), upstreamToken, upstreamUrl);
   if (!oauth && !publicToken && !allowInsecure) {
     throw new Error("Set CML_PUBLIC_MCP_TOKEN, CML_OAUTH_ISSUER, or CML_OAUTH_PILOT_ISSUER=1 before starting cml-mcp-public");
   }
   const server = createCmlPublicMcpBridge({
-    upstreamUrl: firstEnv("CML_PUBLIC_MCP_UPSTREAM_URL") ?? "http://127.0.0.1:8787/mcp",
-    upstreamToken: firstEnv("CML_PUBLIC_MCP_UPSTREAM_TOKEN"),
+    upstreamUrl,
+    upstreamToken,
     publicToken,
     allowInsecure,
     allowedTools: new Set(parseCsv(firstEnv("CML_PUBLIC_MCP_ALLOWED_TOOLS"), DEFAULT_ALLOWED_TOOLS)),

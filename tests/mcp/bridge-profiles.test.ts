@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { actorProfilesFromEnv } from "../../src/mcp/public-bridge.js";
+import { actorProfilesFromEnv, assertUpstreamProtected } from "../../src/mcp/public-bridge.js";
 
 const TOUCHED: string[] = [];
 function setEnv(name: string, value: string): void {
@@ -59,5 +59,28 @@ describe("bridge actor profiles", () => {
   it("resolves slot variables under the deployed host's legacy prefix", () => {
     setEnv("THREE_M_LAYER_PUBLIC_MCP_PA_ACTOR", "chatgpt-principal-advisor");
     expect([...(actorProfilesFromEnv()?.keys() ?? [])]).toEqual(["chatgpt-principal-advisor"]);
+  });
+});
+
+describe("upstream protection under OAuth", () => {
+  // This guard was dropped by a three-way merge against the wrong base and caught
+  // only in review; the tell was isLocalHttpUrl being left with no callers.
+  const REMOTE = "http://mcp.elsewhere.example/mcp";
+  const LOCAL = "http://127.0.0.1:8787/mcp";
+
+  it("refuses a remote upstream with no token when OAuth is on", () => {
+    expect(() => assertUpstreamProtected(true, undefined, REMOTE)).toThrow(/UPSTREAM_TOKEN is required/);
+  });
+
+  it("allows a remote upstream once a token is supplied", () => {
+    expect(() => assertUpstreamProtected(true, "tok", REMOTE)).not.toThrow();
+  });
+
+  it("allows a loopback upstream without a token", () => {
+    expect(() => assertUpstreamProtected(true, undefined, LOCAL)).not.toThrow();
+  });
+
+  it("does not apply when OAuth is off, where the public token guard covers it", () => {
+    expect(() => assertUpstreamProtected(false, undefined, REMOTE)).not.toThrow();
   });
 });

@@ -45,6 +45,18 @@ describe("GovernanceService", () => {
     });
   });
 
+  describe("origin", () => {
+    it("defaults to proxy when no origin is given", () => {
+      const svc = new GovernanceService(new InMemoryGovernanceRepository());
+      expect(svc.origin).toBe("proxy");
+    });
+
+    it("accepts direct at construction", () => {
+      const svc = new GovernanceService(new InMemoryGovernanceRepository(), { origin: "direct" });
+      expect(svc.origin).toBe("direct");
+    });
+  });
+
   // ----------------------------------------------------------
   // Intents
   // ----------------------------------------------------------

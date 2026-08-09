@@ -48,6 +48,7 @@ import {
   ExpertiseSignal,
   Event,
   Report,
+  OriginKind,
   intendId,
   actorId as toActorId,
   domainId as toDomainId,
@@ -119,7 +120,14 @@ function actorTypeContractKey(actorType: string): string {
 // ============================================================
 
 export class GovernanceService {
-  constructor(private readonly repo: GovernanceRepository) {}
+  readonly origin: OriginKind;
+
+  constructor(
+    private readonly repo: GovernanceRepository,
+    options: { origin?: OriginKind } = {}
+  ) {
+    this.origin = options.origin ?? "proxy";
+  }
 
   private async requireActiveActor(actorId: number, label = "Actor"): Promise<Actor | ServiceError> {
     const actor = await this.repo.getActor(toActorId(actorId));

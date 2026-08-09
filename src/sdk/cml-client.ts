@@ -2,7 +2,7 @@ import { Actor, Action, ActorRoleBindingStatus, ActorSessionStatus, ActorStatus,
 import { GovernanceRepository } from "../governance/repository.js";
 import { GovernanceService, ServiceResponse } from "../governance/service.js";
 import { SqliteGovernanceRepository } from "../governance/sqlite-governance-repository.js";
-import { ObsidianVaultService, VaultCommandResult } from "../vault/obsidian-vault-service.js";
+import { ObsidianVaultService, VaultCommandResult, VaultMutationManifest } from "../vault/obsidian-vault-service.js";
 import { envValue } from "../config/env.js";
 
 export interface CmlClientOptions {
@@ -38,6 +38,28 @@ function parseEnvActorId(env: NodeJS.ProcessEnv): number | undefined {
   const parsed = Number(envValue("CML_ACTOR_ID", env));
   if (!Number.isInteger(parsed)) throw new Error("CML_ACTOR_ID must be an integer");
   return parsed;
+}
+
+function renderVaultManifest(manifest: VaultMutationManifest): string {
+  return JSON.stringify({ manifest }, null, 2);
+}
+
+function fallbackVaultManifest(
+  operation: string,
+  path: string,
+  result: VaultCommandResult,
+  destination?: string
+): VaultMutationManifest {
+  return {
+    files: [
+      {
+        path: result.path ?? path,
+        change: result.data === "created" ? "created" : operation === "delete" ? "deleted" : operation === "move" ? "moved" : "changed",
+        operation,
+        ...(destination ? { destination } : {}),
+      },
+    ],
+  };
 }
 
 function toErrorResponse(error: unknown): ServiceResponse<never> {
@@ -287,11 +309,15 @@ export class CmlClient {
   get vault() {
     return {
       read: (params: { path: string }) => this.withActor(async () => success(await this.vaultService.read(params.path))),
+      find: (params: { query: string; path?: string; limit?: number; format?: SearchFormat }) =>
+        this.withActor(async () => success(await this.vaultService.find(params.query, params))),
+      resolve: (params: { query: string; path?: string; limit?: number; format?: SearchFormat }) =>
+        this.withActor(async () => success(await this.vaultService.find(params.query, params))),
       search: (params: { query: string; path?: string; limit?: number; format?: SearchFormat }) =>
         this.withActor(async () => success(await this.vaultService.search(params.query, params))),
-      write: (params: { intent: number; path: string; content: string; governingContractKey?: string; assumedRole?: string; invokedSkillRef?: string; policyRef?: string }) =>
+      write: (params: { intent: number; path: string; content: string; interpretationId?: number; governingContractKey?: string; assumedRole?: string; invokedSkillRef?: string; policyRef?: string }) =>
         this.vaultMutation(params.intent, "write", params.path, () => this.vaultService.write(params.path, params.content), undefined, params),
-      append: (params: { intent: number; path: string; content: string; governingContractKey?: string; assumedRole?: string; invokedSkillRef?: string; policyRef?: string }) =>
+      append: (params: { intent: number; path: string; content: string; interpretationId?: number; governingContractKey?: string; assumedRole?: string; invokedSkillRef?: string; policyRef?: string }) =>
         this.vaultMutation(params.intent, "append", params.path, () => this.vaultService.append(params.path, params.content), undefined, params),
       move: (params: { intent: number; path: string; to: string }) =>
         this.vaultMutation(params.intent, "move", params.path, () => this.vaultService.move(params.path, params.to), params.to),
@@ -320,7 +346,7 @@ export class CmlClient {
     path: string,
     mutate: () => Promise<VaultCommandResult>,
     destination?: string,
-    invocation?: { governingContractKey?: string; assumedRole?: string; invokedSkillRef?: string; policyRef?: string }
+    invocation?: { interpretationId?: number; governingContractKey?: string; assumedRole?: string; invokedSkillRef?: string; policyRef?: string }
   ): Promise<ServiceResponse<VaultMutationResult>> {
     return this.withActor(async (actor) => {
       const intent = await this.service.getIntent(intentId);
@@ -329,12 +355,13 @@ export class CmlClient {
       const action = await this.service.logAction({
         intentId,
         callerActorId: actor.id,
+        interpretationId: invocation?.interpretationId,
         governingContractKey: invocation?.governingContractKey,
         assumedRole: invocation?.assumedRole,
         invokedSkillRef: invocation?.invokedSkillRef,
         policyRef: invocation?.policyRef,
         description: `Vault ${operation}: ${path}${destination ? ` -> ${destination}` : ""}`,
-        outcome: result.data,
+        outcome: renderVaultManifest(result.manifest ?? fallbackVaultManifest(operation, path, result, destination)),
       });
       return success({ vault: result, action: action.ok ? action.data : action });
     });

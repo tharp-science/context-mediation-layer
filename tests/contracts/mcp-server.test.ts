@@ -96,6 +96,14 @@ if (command === "create") {
     });
   });
 
+  // Ported from the m3-layer deploy (RPT-64). These four were live on the host and in
+  // no git history; a merge dropping them again would otherwise be silent.
+  it("registers the vault discovery and resolution tools", async () => {
+    const response = await server.handle({ jsonrpc: "2.0", id: 99, method: "tools/list" });
+    const names = (response?.result as { tools: Array<{ name: string }> }).tools.map((t) => t.name);
+    expect(names).toEqual(expect.arrayContaining(["search", "fetch", "vault_find", "vault_resolve"]));
+  });
+
   it("lists the bounded MVP tool surface", async () => {
     const response = await server.handle({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     expect(response?.result).toMatchObject({

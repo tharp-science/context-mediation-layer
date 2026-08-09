@@ -2,6 +2,7 @@ import { CmlClient, CmlClientOptions } from "../sdk/cml-client.js";
 import { GovernanceRepository } from "../governance/repository.js";
 import { SqliteGovernanceRepository } from "../governance/sqlite-governance-repository.js";
 import { GovernanceService } from "../governance/service.js";
+import { basename } from "node:path";
 import {
   DEFAULT_PUBLIC_MCP_BASE_URL,
   buildOperatorSurfaceState,
@@ -49,6 +50,22 @@ const SERVER_PROTOCOL_VERSION = "2025-11-25";
 const SUPPORTED_PROTOCOL_VERSIONS = new Set(["2025-11-25", "2025-06-18", "2025-03-26"]);
 
 const TOOL_DEFINITIONS: ToolDefinition[] = [
+  {
+    name: "search",
+    title: "Search CML Vault",
+    description: "Compatibility search tool for ChatGPT company knowledge. Returns vault files that can be fetched by id.",
+    inputSchema: objectSchema({
+      query: stringSchema("Search query."),
+    }, ["query"]),
+  },
+  {
+    name: "fetch",
+    title: "Fetch CML Vault Document",
+    description: "Compatibility fetch tool for ChatGPT company knowledge. Fetches the full text for a vault path returned by search.",
+    inputSchema: objectSchema({
+      id: stringSchema("Vault-relative path returned by search."),
+    }, ["id"]),
+  },
   {
     name: "status",
     title: "CML Status",
@@ -423,7 +440,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       scope: stringSchema("Optional scope override."),
       status: enumSchema(["draft", "active"], "Initial contract status."),
       governingContractKey: stringSchema("Optional active contract key authorizing this revision; advisory, not an ACL."),
-      mandateRef: stringSchema("Optional intent, interpretation, report, or build mandate reference."),
+      mandateRef: stringSchema("Optional CML/INT/RPT/build mandate reference."),
     }, ["key", "kind", "title", "body"]),
   },
   {
@@ -467,7 +484,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       status: enumSchema(["draft", "active"], "Replacement contract status."),
       domainId: numberSchema("Optional replacement domain owner/concern signpost."),
       governingContractKey: stringSchema("Optional replacement governing contract key."),
-      mandateRef: stringSchema("Optional intent, interpretation, report, or build mandate reference."),
+      mandateRef: stringSchema("Optional CML/INT/RPT/build mandate reference."),
     }, ["id", "body", "reason"]),
   },
   {
@@ -484,7 +501,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
       parentKey: stringSchema("Optional parent contract key. Defaults to root:agent-bootstrap."),
       status: enumSchema(["draft", "active"], "Initial contract status."),
       governingContractKey: stringSchema("Optional active contract key authorizing this actor type contract."),
-      mandateRef: stringSchema("Optional intent, interpretation, report, or build mandate reference."),
+      mandateRef: stringSchema("Optional CML/INT/RPT/build mandate reference."),
     }, ["name", "body"]),
   },
   {
@@ -513,13 +530,37 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "vault_read",
     title: "Read Vault File",
-    description: "Read a vault file by vault-relative path.",
+    description: "Read a vault vault file by vault-relative path.",
     inputSchema: objectSchema({ actor: stringSchema("Stable CML actor name."), path: stringSchema("Vault-relative path.") }, ["path"]),
+  },
+  {
+    name: "vault_find",
+    title: "Find Vault Paths",
+    description: "Find vault files or folders by filename/path fragment and return canonical vault-relative paths.",
+    inputSchema: objectSchema({
+      actor: stringSchema("Stable CML actor name."),
+      query: stringSchema("Filename or path fragment."),
+      path: stringSchema("Optional vault-relative folder path."),
+      limit: numberSchema("Maximum paths."),
+      format: enumSchema(["text", "json"], "Result format."),
+    }, ["query"]),
+  },
+  {
+    name: "vault_resolve",
+    title: "Resolve Vault Paths",
+    description: "Alias for vault_find. Resolve filename/path fragments to canonical vault-relative paths.",
+    inputSchema: objectSchema({
+      actor: stringSchema("Stable CML actor name."),
+      query: stringSchema("Filename or path fragment."),
+      path: stringSchema("Optional vault-relative folder path."),
+      limit: numberSchema("Maximum paths."),
+      format: enumSchema(["text", "json"], "Result format."),
+    }, ["query"]),
   },
   {
     name: "vault_search",
     title: "Search Vault",
-    description: "Run bounded text search over the vault. Prefer path and limit for large vaults.",
+    description: "Run bounded text search over the vault vault. Prefer path and limit for large vaults.",
     inputSchema: objectSchema({
       actor: stringSchema("Stable CML actor name."),
       query: stringSchema("Search query."),
@@ -531,10 +572,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "vault_write",
     title: "Write Vault File",
-    description: "Write a vault file. Requires an intent mandate and logs a governed action.",
+    description: "Write a vault vault file. Requires an intent mandate and logs a CML action.",
     inputSchema: objectSchema({
       actor: stringSchema("Stable CML actor name."),
       intent: numberSchema("Mandating intent id."),
+      interpretationId: numberSchema("Optional interpretation id this file-change action should attach to."),
       path: stringSchema("Vault-relative path."),
       content: stringSchema("Full replacement content."),
       governingContractKey: stringSchema("Optional active contract key authorizing the write, usually injected by a trusted bridge profile."),
@@ -546,10 +588,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: "vault_append",
     title: "Append Vault File",
-    description: "Append to a vault file. Requires an intent mandate and logs a governed action.",
+    description: "Append to a vault vault file. Requires an intent mandate and logs a CML action.",
     inputSchema: objectSchema({
       actor: stringSchema("Stable CML actor name."),
       intent: numberSchema("Mandating intent id."),
+      interpretationId: numberSchema("Optional interpretation id this file-change action should attach to."),
       path: stringSchema("Vault-relative path."),
       content: stringSchema("Content to append."),
       governingContractKey: stringSchema("Optional active contract key authorizing the append, usually injected by a trusted bridge profile."),
@@ -600,7 +643,7 @@ export class CmlMcpServer {
         name: "cml-mcp",
         version: "0.1.0",
       },
-      instructions: "Use CML tools for governed state and vault access. Vault mutations require a mandating intent.",
+      instructions: "Use CML tools for governed CML and vault vault access. Vault mutations require a mandating intent.",
     };
   }
 
@@ -621,6 +664,7 @@ export class CmlMcpServer {
 
     try {
       const response = await this.executeTool(client, name, args);
+      if (isDirectToolResult(response)) return response;
       return toolResult(response, !response.ok);
     } finally {
       client.close();
@@ -629,6 +673,10 @@ export class CmlMcpServer {
 
   private executeTool(client: CmlClient, name: string, args: Record<string, unknown>) {
     switch (name) {
+      case "search":
+        return this.searchCompatibilityTool(client, requireString(args, "query"));
+      case "fetch":
+        return this.fetchCompatibilityTool(client, requireString(args, "id"));
       case "status":
         return client.status();
       case "ui_manifest":
@@ -897,6 +945,14 @@ export class CmlMcpServer {
         });
       case "vault_read":
         return client.vault.read({ path: requireString(args, "path") });
+      case "vault_find":
+      case "vault_resolve":
+        return client.vault.find({
+          query: requireString(args, "query"),
+          path: optionalString(args, "path"),
+          limit: optionalNumber(args, "limit"),
+          format: optionalString(args, "format") as any,
+        });
       case "vault_search":
         return client.vault.search({
           query: requireString(args, "query"),
@@ -907,6 +963,7 @@ export class CmlMcpServer {
       case "vault_write":
         return client.vault.write({
           intent: requireNumber(args, "intent"),
+          interpretationId: optionalNumber(args, "interpretationId"),
           path: requireString(args, "path"),
           content: requireString(args, "content"),
           governingContractKey: optionalString(args, "governingContractKey"),
@@ -917,6 +974,7 @@ export class CmlMcpServer {
       case "vault_append":
         return client.vault.append({
           intent: requireNumber(args, "intent"),
+          interpretationId: optionalNumber(args, "interpretationId"),
           path: requireString(args, "path"),
           content: requireString(args, "content"),
           governingContractKey: optionalString(args, "governingContractKey"),
@@ -927,6 +985,55 @@ export class CmlMcpServer {
       default:
         throw new Error(`Unknown tool: ${name}`);
     }
+  }
+
+  private async searchCompatibilityTool(client: CmlClient, query: string): Promise<Record<string, unknown>> {
+    const response = await client.vault.search({ query, limit: 20, format: "json" });
+    if (!response.ok) throw new Error(response.error.message);
+    const vault = response.data;
+    const rawResults = typeof vault.data === "string" ? JSON.parse(vault.data) : [];
+    if (!Array.isArray(rawResults)) return dataOnlyToolResult({ results: [] });
+
+    const byPath = new Map<string, { path: string; line?: number; preview?: string }>();
+    for (const item of rawResults) {
+      if (!isRecord(item) || typeof item.path !== "string") continue;
+      const existing = byPath.get(item.path);
+      if (existing) continue;
+      byPath.set(item.path, {
+        path: item.path,
+        line: typeof item.line === "number" ? item.line : undefined,
+        preview: typeof item.preview === "string" ? item.preview : undefined,
+      });
+    }
+
+    return dataOnlyToolResult({
+      results: Array.from(byPath.values()).map((item) => ({
+        id: item.path,
+        title: basename(item.path),
+        url: vaultDocumentUrl(item.path),
+        ...(item.preview ? { text: item.preview } : {}),
+        metadata: {
+          source: "knowflakes-vault",
+          path: item.path,
+          ...(item.line ? { line: item.line } : {}),
+        },
+      })),
+    });
+  }
+
+  private async fetchCompatibilityTool(client: CmlClient, id: string): Promise<Record<string, unknown>> {
+    const response = await client.vault.read({ path: id });
+    if (!response.ok) throw new Error(response.error.message);
+    return dataOnlyToolResult({
+      id,
+      title: basename(id),
+      text: response.data.data ?? "",
+      url: vaultDocumentUrl(id),
+      metadata: {
+        source: "knowflakes-vault",
+        path: id,
+      },
+    });
   }
 
   private async withOperatorContext<T>(
@@ -980,6 +1087,20 @@ function toolResult(structuredContent: unknown, isError = false): Record<string,
     structuredContent,
     isError,
   };
+}
+
+function dataOnlyToolResult(data: unknown): Record<string, unknown> {
+  return {
+    content: [{ type: "text", text: JSON.stringify(data) }],
+  };
+}
+
+function isDirectToolResult(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && Array.isArray(value.content);
+}
+
+function vaultDocumentUrl(path: string): string {
+  return `vault://knowflakes/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 function objectSchema(properties: Record<string, unknown>, required: string[] = []): Record<string, unknown> {

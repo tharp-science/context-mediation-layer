@@ -933,6 +933,52 @@ if (command === "create") {
     expect(listed.data.some((item: { title: string }) => item.title === "Session compression")).toBe(true);
   });
 
+  it("treats an empty or whitespace-only --unmandated-reason as absent, not as a persisted reason", () => {
+    const emptyViaEquals = cli([
+      "report",
+      "create",
+      "--kind",
+      "note",
+      "--title",
+      "Empty reason via --flag=",
+      "--summary",
+      "s",
+      "--unmandated-reason=",
+    ]);
+    expect(emptyViaEquals.ok).toBe(true);
+    expect(emptyViaEquals.data.unmandatedReason).toBeUndefined();
+
+    const whitespaceViaSeparateArg = cli([
+      "report",
+      "create",
+      "--kind",
+      "note",
+      "--title",
+      "Whitespace reason via separate arg",
+      "--summary",
+      "s",
+      "--unmandated-reason",
+      "   ",
+    ]);
+    expect(whitespaceViaSeparateArg.ok).toBe(true);
+    expect(whitespaceViaSeparateArg.data.unmandatedReason).toBeUndefined();
+
+    const real = cli([
+      "report",
+      "create",
+      "--kind",
+      "note",
+      "--title",
+      "Real reason still persists",
+      "--summary",
+      "s",
+      "--unmandated-reason",
+      "standalone observation, no active intent",
+    ]);
+    expect(real.ok).toBe(true);
+    expect(real.data.unmandatedReason).toBe("standalone observation, no active intent");
+  });
+
   it("writes vault material through Obsidian CLI and logs a governed action", () => {
     const intent = cli(["intent", "create", "--description", "Vault mutation mandate", "--source", "test"]);
     const written = cli([

@@ -1040,6 +1040,7 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
 
   if (group === "report") {
     if (op === "create") {
+      const rawUnmandatedReason = flag(flags, "unmandated-reason");
       return ctx.service.registerReport({
         kind: requiredFlag(flags, "kind"),
         title: requiredFlag(flags, "title"),
@@ -1053,7 +1054,10 @@ async function dispatch(ctx: CliContext, command: string[], flags: Flags, config
         assumedRole: flag(flags, "assumed-role"),
         invokedSkillRef: flag(flags, "invoked-skill-ref"),
         policyRef: flag(flags, "policy-ref"),
-        unmandatedReason: flag(flags, "unmandated-reason"),
+        // Empty or whitespace-only reads as absent: "" would persist a third state
+        // ("deliberately unmandated, reason withheld") that the schema cannot express
+        // and no read path expects.
+        unmandatedReason: rawUnmandatedReason?.trim() ? rawUnmandatedReason : undefined,
       });
     }
     if (op === "list") {

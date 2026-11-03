@@ -358,7 +358,7 @@ authority, shared evidence, and durable provenance.
 
 Operational evidence from the lab where this layer was built and first used
 — six governance cases with raw records — is published separately:
-[cml-evidence-pack](https://github.com/sebb001/cml-evidence-pack).
+[cml-evidence-pack](https://github.com/tharp-science/cml-evidence-pack).
 
 ## Configuration
 
@@ -388,10 +388,10 @@ node dist/cli/index.js setup mcp --transport public --out ./mcp.public.json
 
 ## Related work
 
-- [cml-evidence-pack](https://github.com/sebb001/cml-evidence-pack) —
+- [cml-evidence-pack](https://github.com/tharp-science/cml-evidence-pack) —
   operational evidence: six governance cases with raw records, from the lab
   where this layer was built and first used.
-- [epilab](https://github.com/sebb001/epilab) — the simulation laboratory
+- [epilab](https://github.com/tharp-science/epilab) — the simulation laboratory
   testing the underlying governance primitives.
 - [Governing Epistemic Systems](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=6417898)
   (Bohle, 2026, SSRN) — the companion preprint.

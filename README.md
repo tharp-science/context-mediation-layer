@@ -2,6 +2,8 @@
 
 Decision governance and correspondence infrastructure for human-AI environments: a layer that mediates what humans and agents may treat as shared, durable, actionable state.
 
+**License:** code is MIT; documentation, evidence material and other non-code files are not openly licensed unless a file says otherwise. See [License](#license).
+
 ## At a glance
 
 This repository is a working prototype and architecture demonstrator of a
